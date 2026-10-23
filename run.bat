@@ -1,4 +1,5 @@
 @echo off
+chcp 65001 >nul
 rem Запуск помощника на Windows. Ollama должна быть запущена (значок в трее).
 cd /d %~dp0
 if not exist .venv (
