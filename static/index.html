@@ -1,0 +1,109 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Помощник по ДОУ</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<div id="login" class="login hidden">
+  <form id="loginForm" class="card">
+    <h1>Помощник по документообороту</h1>
+    <p class="muted">Вход для сотрудников. Демо: employee / employee, doc / doc (Департамент ДОУ).</p>
+    <input id="lgLogin" placeholder="Логин" autocomplete="username" required>
+    <input id="lgPass" type="password" placeholder="Пароль" autocomplete="current-password" required>
+    <button>Войти</button>
+    <p id="lgErr" class="err"></p>
+  </form>
+</div>
+
+<div id="app" class="hidden">
+  <header>
+    <div class="brand">Помощник по Инструкции ДОУ</div>
+    <nav id="tabs">
+      <button data-tab="chat" class="active">Вопрос</button>
+      <button data-tab="draft">Черновик документа</button>
+      <button data-tab="route">Маршрут визирования</button>
+      <button data-tab="check">Проверка проекта</button>
+      <button data-tab="admin" class="adminOnly hidden">Журнал</button>
+    </nav>
+    <div class="who"><span id="status" class="pill"></span> <span id="whoami"></span> <a href="#" id="logout">выйти</a></div>
+  </header>
+
+  <main>
+    <!-- Чат -->
+    <section id="tab-chat" class="tab">
+      <div id="messages" class="messages">
+        <div class="msg bot">Здравствуйте! Я отвечаю по Инструкции по документообороту (приказ от 15.10.2026 № ОД-184), Матрице визирования и модульным документам. Каждый ответ — со ссылкой на пункт. Могу подготовить черновик приказа или распоряжения по модулю и подсказать маршрут визирования.<div class="chips">
+            <button class="chip">Какой срок согласования проекта приказа?</button>
+            <button class="chip">Кто визирует распоряжение о создании рабочей группы?</button>
+            <button class="chip">Что делать с документом с отметкой «Срочно»?</button>
+            <button class="chip">Подготовь распоряжение о рабочей группе по внедрению CRM</button>
+          </div>
+        </div>
+      </div>
+      <form id="askForm" class="ask">
+        <textarea id="q" rows="1" placeholder="Задайте вопрос по документообороту…" required></textarea>
+        <button>Спросить</button>
+      </form>
+    </section>
+
+    <!-- Черновик по модулю -->
+    <section id="tab-draft" class="tab hidden">
+      <div class="grid2">
+        <div class="card">
+          <h2>1. Выберите модуль</h2>
+          <select id="modSel"></select>
+          <h2>2. Опишите ситуацию своими словами</h2>
+          <textarea id="modDesc" rows="6" placeholder="Например: нужна рабочая группа по внедрению CRM, руководитель — начальник управления клиентских сервисов Иванов И. И., срок — до 15.12.2026, результат — план внедрения…"></textarea>
+          <button id="modExtract">Заполнить поля по описанию</button>
+          <p class="muted small">Модель раскладывает описание по полям шаблона. Чего нет в описании, она оставляет пустым — заполните вручную.</p>
+        </div>
+        <div class="card">
+          <h2>3. Проверьте поля</h2>
+          <div id="slots"></div>
+          <button id="modFill">Сформировать .docx</button>
+          <div id="fillResult"></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Маршрут -->
+    <section id="tab-route" class="tab hidden">
+      <div class="card">
+        <h2>Вид документа по Матрице визирования</h2>
+        <select id="rowSel"></select>
+        <label class="row"><input type="checkbox" id="modular" checked> Проект подготовлен по модульному документу</label>
+        <div id="routeQuestions"></div>
+        <div id="routeOut"></div>
+      </div>
+    </section>
+
+    <!-- Проверка -->
+    <section id="tab-check" class="tab hidden">
+      <div class="card">
+        <h2>Проверка проекта документа</h2>
+        <p class="muted">Загрузите проект в .docx — проверю, что удалены служебные элементы модуля и сохранены обязательные зоны (п. 3.3 Методических рекомендаций).</p>
+        <input type="file" id="checkFile" accept=".docx">
+        <div id="checkOut"></div>
+      </div>
+    </section>
+
+    <!-- Журнал -->
+    <section id="tab-admin" class="tab hidden">
+      <div class="card">
+        <h2>База знаний</h2>
+        <div id="kb"></div>
+        <button id="reindex">Переиндексировать</button>
+        <h2>Последние вопросы</h2>
+        <table id="logTbl"><thead><tr><th>Время</th><th>Кто</th><th>Вопрос</th><th>Статус</th><th>Оценка</th></tr></thead><tbody></tbody></table>
+      </div>
+    </section>
+  </main>
+</div>
+
+<dialog id="srcDlg"><h3 id="srcTitle"></h3><p id="srcText"></p><form method="dialog"><button>Закрыть</button></form></dialog>
+<script src="/static/app.js"></script>
+</body>
+</html>

@@ -136,7 +136,7 @@ class Index:
                 parts.append(float(np.clip((dense[i] - 0.35) / 0.35, 0, 1)))
             rel = max(parts) if dense is None else 0.4 * parts[0] + 0.6 * parts[1]
             c = self.chunks[i]
-            res.append({**c.to_dict(), "relevance": round(rel, 2)})
+            res.append({**c.to_dict(), "relevance": round(float(rel), 2)})
         res.sort(key=lambda r: -r["relevance"])
         return res
 

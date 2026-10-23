@@ -1,0 +1,9 @@
+fastapi==0.162.0
+uvicorn==0.54.0
+httpx==0.28.1
+numpy==2.5.4
+pymorphy3==2.0.6
+pymorphy3-dicts-ru==2.4.417150.4580142
+python-docx==1.2.0
+python-multipart==0.0.32
+pytest==8.4.2
