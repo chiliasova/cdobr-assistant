@@ -4,7 +4,7 @@ rem Запуск помощника на Windows. Ollama должна быть �
 cd /d %~dp0
 if not exist .venv (
   echo Создаю виртуальное окружение...
-  py -3.13 -m venv .venv || py -3.12 -m venv .venv || python -m venv .venv
+  py -3.14 -m venv .venv || py -3.13 -m venv .venv || py -3.12 -m venv .venv || python -m venv .venv
 )
 .venv\Scripts\python -m pip install -q -r requirements.txt
 echo.
