@@ -6,7 +6,7 @@ if not exist .venv (
   echo Создаю виртуальное окружение...
   py -3.14 -m venv .venv || py -3.13 -m venv .venv || py -3.12 -m venv .venv || python -m venv .venv
 )
-.venv\Scripts\python -m pip install -q -r requirements.txt
+.venv\Scripts\python -m pip install -q --no-cache-dir --disable-pip-version-check -r requirements.txt
 echo.
 echo Откройте в браузере: http://127.0.0.1:8000   (логин employee / employee или doc / doc)
 echo Первый запуск строит векторный индекс через bge-m3, это 1-3 минуты.
