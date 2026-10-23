@@ -13,7 +13,7 @@
    ollama pull qwen3:4b-instruct-2507-q4_K_M
    ollama pull bge-m3
    ```
-2. Установите Python 3.11+ с https://www.python.org/downloads/ (галочка «Add python.exe to PATH»).
+2. Установите Python 3.13 (стабильный, не бета) с https://www.python.org/downloads/ (галочка «Add python.exe to PATH»).
 3. Скачайте проект и запустите `run.bat` двойным щелчком.
 4. Откройте http://127.0.0.1:8000. Демо-входы: `employee / employee` (сотрудник), `doc / doc` (Департамент ДОУ, видит журнал и переиндексацию).
 
