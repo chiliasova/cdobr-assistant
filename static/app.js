@@ -166,7 +166,9 @@ async function loadSlots() {
 }
 
 $("#modExtract").onclick = async () => {
-  const b = $("#modExtract"); b.disabled = true; b.textContent = "Модель заполняет поля…";
+  const b = $("#modExtract"); b.disabled = true;
+  const t0 = Date.now();
+  const tick = setInterval(() => (b.textContent = `Модель заполняет поля… ${Math.round((Date.now() - t0) / 1000)} с`), 500);
   try {
     const r = await api(`/api/modules/${encodeURIComponent($("#modSel").value)}/extract`, { method: "POST", body: JSON.stringify({ description: $("#modDesc").value }) });
     for (const [k, v] of Object.entries(r.values)) {
@@ -174,6 +176,7 @@ $("#modExtract").onclick = async () => {
       if (el) { el.value = v; el.closest(".slot").classList.add("filled"); }
     }
   } catch (e) { alert(e.message); }
+  clearInterval(tick);
   b.disabled = false; b.textContent = "Заполнить поля по описанию";
 };
 

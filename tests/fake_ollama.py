@@ -13,6 +13,8 @@ def handler(request: httpx.Request) -> httpx.Response:
         raise httpx.ConnectError("нет эмбеддингов в тестах")
     if request.url.path == "/api/chat":
         user = body["messages"][-1]["content"]
+        if user.startswith("Поля:"):
+            return httpx.Response(200, json={"message": {"content": "s1: внедрению CRM-системы\ns2: -\ns7: 15.12.2026"}})
         if body.get("format"):
             ids = list(body["format"]["properties"])
             return httpx.Response(200, json={"message": {"content": json.dumps({ids[0]: "внедрению CRM-системы"})}})

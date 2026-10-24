@@ -7,9 +7,13 @@
 """
 from __future__ import annotations
 
+import logging
 import re
+import time
 
 from . import config, llm, modules, routing, search
+
+log = logging.getLogger(__name__)
 
 SYSTEM = """Ты — помощник сотрудника по Инструкции о документообороте Организации.
 Отвечай ТОЛЬКО по фрагментам ниже. Ничего не придумывай.
@@ -184,20 +188,36 @@ def ask(question: str, history: list[dict] | None = None) -> dict:
 
 # ---- Заполнение модуля по описанию ситуации ----------------------------------------
 
+EMPTY = {"", "-", "—", "нет", "пусто", "не указано", "нет данных"}
+LINE_RE = re.compile(r"^\s*[-*]?\s*(s\d+)\s*[:=|—–-]\s*(.*?)\s*$", re.M)
+
+
 def extract_slots(description: str, slots: list[dict]) -> dict[str, str]:
-    """LLM раскладывает свободное описание по полям модуля. Пустые поля не выдумывает."""
+    """LLM раскладывает свободное описание по полям модуля. Пустые поля не выдумывает.
+
+    Формат ответа — строки «s3: значение», а не JSON: маленькая модель в режиме
+    строгого JSON на Windows зацикливалась и обрывала ответ.
+    """
     fields = "\n".join(
-        f"- {s['id']}: {s['label']}. {s['hint']} (контекст: «{s['context']} …»)"
-        + (f" Варианты: {', '.join(s['options'])}." if s.get("options") else "")
-        + (" Формат: ДД.ММ.ГГГГ." if s["kind"] == "date" else "")
+        f"{s['id']} — {s['label']}: «…{s['context'][-50:]} ___»"
+        + (f" (варианты: {' / '.join(s['options'])})" if s.get("options") else "")
+        + (" (дата ДД.ММ.ГГГГ)" if s["kind"] == "date" else "")
         for s in slots)
-    schema = {"type": "object", "properties": {s["id"]: {"type": "string"} for s in slots}}
     msgs = [
         {"role": "system", "content": "Ты заполняешь поля шаблона документа по описанию пользователя. "
-         "Бери сведения только из описания. Если сведения для поля нет — верни пустую строку. "
-         "Пиши значения так, чтобы они грамматически продолжали контекст (в нужном падеже). "
-         "Отвечай только JSON."},
+         "Бери сведения только из описания, ничего не придумывай. "
+         "Значение должно грамматически продолжать текст перед ___ (нужный падеж). "
+         "Ответ — по одной строке на поле в формате «s1: значение». Если сведений нет — «s1: -». "
+         "Больше ничего не пиши."},
         {"role": "user", "content": f"Поля:\n{fields}\n\nОписание:\n{description}"},
     ]
-    data = llm.chat_json(msgs, schema)
-    return {k: str(v).strip() for k, v in data.items() if k in schema["properties"] and str(v).strip()}
+    t = time.time()
+    text = llm.chat(msgs, max_tokens=60 * len(slots) + 100)
+    log.info("Поля модуля заполнены за %.1f с", time.time() - t)
+    ids = {s["id"] for s in slots}
+    out = {}
+    for sid, val in LINE_RE.findall(text):
+        val = val.strip(" «»\"'")
+        if sid in ids and sid not in out and val.lower().strip(".") not in EMPTY:
+            out[sid] = val
+    return out

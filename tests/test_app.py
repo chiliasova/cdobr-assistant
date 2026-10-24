@@ -105,3 +105,9 @@ def test_truncated_json_is_salvaged(monkeypatch):
     monkeypatch.setattr(httpx, "post", lambda url, **kw: httpx.Response(
         200, json={"message": {"content": cut}, "done_reason": "length"}, request=httpx.Request("POST", url)))
     assert llm.chat_json([], {}) == {"s1": "внедрению CRM-системы", "s2": 'подготовки к "внедрению"'}
+
+
+def test_extract_slots(client):
+    mid = "Модуль_распоряжения_о_рабочей_группе"
+    r = client.post(f"/api/modules/{mid}/extract", json={"description": "рабочая группа по CRM"}).json()
+    assert r["values"] == {"s1": "внедрению CRM-системы", "s7": "15.12.2026"}
