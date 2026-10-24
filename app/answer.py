@@ -202,6 +202,7 @@ def extract_slots(description: str, slots: list[dict]) -> dict[str, str]:
         f"{s['id']} ({s['label']}): «{s['context'][-50:]} ___ {s.get('after', '')}»"
         + (f"; варианты: {' / '.join(s['options'])}" if s.get("options") else "")
         + ("; дата ДД.ММ.ГГГГ" if s["kind"] == "date" else "")
+        + ("; здесь действие, не дата" if s["kind"] == "text" and "Срок" in s["label"] else "")
         for s in slots)
     msgs = [
         {"role": "system", "content": "Ты заполняешь поля шаблона документа по описанию пользователя. "
@@ -221,18 +222,29 @@ def extract_slots(description: str, slots: list[dict]) -> dict[str, str]:
     for sid, val in LINE_RE.findall(text):
         if sid not in by_id or sid in out:
             continue
-        val = _strip_echo(val, by_id[sid]["context"])
+        slot = by_id[sid]
+        val = _strip_echo(val, slot["context"], slot.get("after", ""), slot["kind"])
+        # текстовое поле, в которое попала одна дата или копия другого поля, — пусть заполнит человек
+        if slot["kind"] != "date" and (re.fullmatch(r"[\d.]+", val) or val in out.values()):
+            continue
         if val.lower().strip(".") not in EMPTY:
             out[sid] = val
     return out
 
 
-def _strip_echo(val: str, context: str) -> str:
-    """Модель иногда повторяет текст перед пропуском («…возложить на директора…») — убираем его."""
+def _strip_echo(val: str, context: str, after: str = "", kind: str = "text") -> str:
+    """Модель иногда повторяет текст вокруг пропуска («…возложить на директора…», «… и представить») — убираем его."""
     val = val.strip(" «»\"'")
-    for piece in (context, context[-50:], context.split(":")[-1]):
+    for piece in (context, context[-50:], context.split(":")[-1], context.split("…")[-1]):
         piece = piece.strip(" …")
         if len(piece) >= 3 and piece in val:
             val = val[val.rindex(piece) + len(piece):]
+    for piece in (after, after.split("…")[0], after[:15]):
+        piece = piece.strip(" …,.:;")
+        if len(piece) >= 3 and piece in val:
+            val = val[:val.index(piece)]
+    if kind == "date":
+        m = re.search(r"\d{1,2}\.\d{1,2}\.\d{2,4}", val)
+        val = m.group() if m else val
     val = re.sub(r"_{2,}|…", " ", val)
-    return re.sub(r"\s+", " ", val).strip(" :«»\"'")
+    return re.sub(r"\s+", " ", val).strip(" :,«»\"'")
