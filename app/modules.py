@@ -401,6 +401,7 @@ def _constant_pieces(module_id: str) -> list[str]:
         t = re.sub(r"\s*\[\d+\]", "", p.text)
         if any(w in t for w in ("НЕ УДАЛЯТЬ", "МОДУЛЬНЫЙ", "ГЕРБ", "место для изображения", "И. О. Фамилия")):
             continue
+        t = CHOICE_RE.sub("___", t)  # «разработанного / измененного» — выбор исполнителя, не постоянный текст
         for piece in BLANK_RE.split(t):
             piece = piece.strip(" .,:;«»()")
             if len(piece) >= 15:
