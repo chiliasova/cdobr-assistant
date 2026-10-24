@@ -4,11 +4,14 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Помощник по ДОУ</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&display=swap">
 <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
 <div id="login" class="login hidden">
   <form id="loginForm" class="card">
+    <div class="logo big">Д</div>
     <h1>Помощник по документообороту</h1>
     <p class="muted">Вход для сотрудников. Демо: employee / employee, doc / doc (Департамент ДОУ).</p>
     <input id="lgLogin" placeholder="Логин" autocomplete="username" required>
@@ -20,7 +23,7 @@
 
 <div id="app" class="hidden">
   <header>
-    <div class="brand">Помощник по Инструкции ДОУ</div>
+    <div class="brand"><span class="logo">Д</span><span><b>Помощник ДОУ</b><small>Инструкция № ОД-184 · локальная модель</small></span></div>
     <nav id="tabs">
       <button data-tab="chat" class="active">Вопрос</button>
       <button data-tab="draft">Черновик документа</button>
@@ -35,7 +38,7 @@
     <!-- Чат -->
     <section id="tab-chat" class="tab">
       <div id="messages" class="messages">
-        <div class="msg bot">Здравствуйте! Я отвечаю по Инструкции по документообороту (приказ от 15.10.2026 № ОД-184), Матрице визирования и модульным документам. Каждый ответ — со ссылкой на пункт. Могу подготовить черновик приказа или распоряжения по модулю и подсказать маршрут визирования.<div class="chips">
+        <div class="msg bot welcome"><div class="hello">Чем помочь с документами?</div>Я отвечаю по Инструкции по документообороту (приказ от 15.10.2026 № ОД-184), Матрице визирования и модульным документам. Каждый ответ — со ссылкой на пункт. Могу подготовить черновик приказа или распоряжения по модулю и подсказать маршрут визирования.<div class="chips">
             <button class="chip">Мне нужно подготовить приказ о вводе информационной системы в эксплуатацию. Что для этого нужно сделать?</button>
             <button class="chip">Можно ли направить внутреннюю служебную записку без сопроводительного письма? А если сопроводительное письмо необходимо, как его правильно составить?</button>
             <button class="chip">Я подготовил приказ на основе модульного документа. Проверь его и подскажи, что делать дальше</button>
