@@ -111,7 +111,9 @@ function finishAnswer(bot, q, res) {
   html += `<div><span class="badge ${res.status}">${STATUS[res.status] || res.status}</span></div>`;
   html += sourcesHtml(res.sources);
   const acts = [];
-  if (res.module) acts.push(`<button data-act="draft" data-mod="${esc(res.module.module_id)}">Подготовить черновик: ${esc(res.module.title)}</button>`);
+  for (const a of res.actions || []) {
+    acts.push(`<button data-act="${a.type}" data-mod="${esc(a.module_id || "")}">${esc(a.label)}</button>`);
+  }
   if (res.route) acts.push(`<button data-act="route" data-route="${esc(res.route.group)}|${res.route.row}">Показать маршрут визирования</button>`);
   acts.push(`<button data-act="rate" data-v="1">👍 полезно</button><button data-act="rate" data-v="-1">👎 не то</button>`);
   html += `<div class="actions">${acts.join("")}</div>`;
@@ -130,8 +132,60 @@ $("#messages").addEventListener("click", async (e) => {
     t.parentElement.querySelectorAll("[data-act=rate]").forEach((b) => (b.disabled = true));
   }
   if (t.dataset.act === "route") { openTab("route"); $("#rowSel").value = t.dataset.route; $("#routeQuestions").innerHTML = ""; loadRoute(); }
-  if (t.dataset.act === "draft") { openTab("draft"); $("#modSel").value = t.dataset.mod; await loadSlots(); $("#modDesc").value = msg.dataset.q; }
+  if (t.dataset.act === "draft") startWizard(t.dataset.mod);
+  if (t.dataset.act === "template") location.href = `/api/modules/${encodeURIComponent(t.dataset.mod)}/template`;
+  if (t.dataset.act === "remarks") location.href = "/api/remarks-template";
+  if (t.dataset.act === "check") { openTab("check"); $("#checkFile").click(); }
+  if (t.dataset.act === "openDraft") { openTab("draft"); $("#modSel").value = t.dataset.mod; await loadSlots(); }
 });
+
+// ---- Подготовка проекта в диалоге: описание → модель заполняет поля → уточняющие вопросы ----
+let wizard = null;
+
+async function startWizard(moduleId) {
+  const m = await api("/api/modules/" + encodeURIComponent(moduleId));
+  wizard = { moduleId, slots: m.slots, matrix: m.matrix, values: {}, queue: [], stage: "describe" };
+  addMsg("bot", "Опишите ситуацию своими словами: о чём документ, цель, участники и их должности, сроки, " +
+    "ожидаемый результат, кто контролирует и кто подписывает. Чего не хватит — уточню.");
+  $("#q").placeholder = "Опишите ситуацию…"; $("#q").focus();
+}
+
+function askNextSlot() {
+  const s = wizard.queue[0];
+  const opts = s.options ? ` Варианты: ${s.options.join(" / ")}.` : "";
+  const fmt = s.kind === "date" ? " Дата в формате ДД.ММ.ГГГГ." : "";
+  addMsg("bot", `Уточните, пожалуйста: ${s.label.toLowerCase()} — «…${s.context} ___».${opts}${fmt}` +
+    (s.hint ? `\n${s.hint}` : "") + "\n(Напишите «пропустить», чтобы оставить поле пустым.)");
+}
+
+async function wizardInput(text) {
+  addMsg("user", esc(text));
+  if (wizard.stage === "describe") {
+    const wait = addMsg("bot typing", "Раскладываю описание по полям шаблона…");
+    try {
+      const r = await api(`/api/modules/${encodeURIComponent(wizard.moduleId)}/extract`, { method: "POST", body: JSON.stringify({ description: text }) });
+      wizard.values = r.values;
+    } catch (e) { wizard.values = {}; }
+    wait.classList.remove("typing");
+    const filled = wizard.slots.filter((s) => wizard.values[s.id]);
+    wait.innerHTML = filled.length
+      ? "Из описания заполнил:<br>" + filled.map((s) => `• <b>${esc(s.label)}</b>: ${esc(wizard.values[s.id])}`).join("<br>")
+      : "Из описания ничего не удалось взять — спрошу по полям.";
+    wizard.queue = wizard.slots.filter((s) => !wizard.values[s.id]);
+    wizard.stage = "slots";
+  } else {
+    const s = wizard.queue.shift();
+    if (!/^пропуст/i.test(text.trim())) wizard.values[s.id] = text.trim();
+  }
+  if (wizard.queue.length) return askNextSlot();
+  const r = await api(`/api/modules/${encodeURIComponent(wizard.moduleId)}/fill`, { method: "POST", body: JSON.stringify({ values: wizard.values }) });
+  let html = `Проект готов: <a href="${r.url}">⬇ ${esc(r.file)}</a>. Служебные элементы модуля удалены [Методические рекомендации, п. 3.3].`;
+  if (r.warnings.length) html += "<br>" + r.warnings.map((w) => `<div class="issue">${esc(w)}</div>`).join("");
+  html += `<div class="actions"><button data-act="openDraft" data-mod="${esc(wizard.moduleId)}">Открыть поля для правки</button>` +
+    (wizard.matrix ? `<button data-act="route" data-route="${esc(wizard.matrix.group)}|${wizard.matrix.row}">Показать маршрут визирования</button>` : "") + "</div>";
+  addMsg("bot", html);
+  wizard = null; $("#q").placeholder = "Задайте вопрос по документообороту…";
+}
 
 async function showSource(s) {
   const full = await api("/api/source/" + encodeURIComponent(s.id));
@@ -140,7 +194,11 @@ async function showSource(s) {
   $("#srcDlg").showModal();
 }
 
-$("#askForm").onsubmit = (e) => { e.preventDefault(); const q = $("#q").value.trim(); if (q) { $("#q").value = ""; ask(q); } };
+$("#askForm").onsubmit = (e) => {
+  e.preventDefault(); const q = $("#q").value.trim(); if (!q) return;
+  $("#q").value = "";
+  wizard ? wizardInput(q) : ask(q);
+};
 $("#q").addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); $("#askForm").requestSubmit(); } });
 
 // ---- Черновик по модулю ----
@@ -219,9 +277,18 @@ $("#checkFile").onchange = async (e) => {
   const fd = new FormData(); fd.append("file", e.target.files[0]);
   const r = await fetch("/api/check", { method: "POST", body: fd });
   const data = await r.json();
-  $("#checkOut").innerHTML = data.issues?.length
+  if (!r.ok) { $("#checkOut").innerHTML = `<div class="issue">${esc(data.detail || r.statusText)}</div>`; return; }
+  let html = data.module
+    ? `<p>Проект сопоставлен с модулем «${esc(data.module.title)}» (совпадение постоянных формулировок ${data.match}%).</p>` : "";
+  html += data.issues?.length
     ? data.issues.map((i) => `<div class="issue">${esc(i.message)} <span class="small">[${esc(i.ref)}]</span></div>`).join("")
-    : `<div class="good">Замечаний нет.</div>`;
+    : `<div class="good">Замечаний нет: поля заполнены, служебные элементы удалены, формулировки модуля сохранены.</div>`;
+  if (data.next_steps?.length) html += `<h2>Что дальше</h2><ol class="route">${data.next_steps.map((s) =>
+    `<li>${esc(s.text)} <span class="muted small">[${esc(s.ref)}]</span></li>`).join("")}</ol>`;
+  if (data.matrix) html += `<p><button id="checkRoute">Маршрут визирования по Матрице</button></p>`;
+  $("#checkOut").innerHTML = html;
+  if (data.matrix) $("#checkRoute").onclick = () => { openTab("route"); $("#rowSel").value = `${data.matrix.group}|${data.matrix.row}`; loadRoute(); };
+  e.target.value = "";
 };
 
 // ---- Журнал ----

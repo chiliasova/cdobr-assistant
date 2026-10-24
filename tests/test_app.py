@@ -111,3 +111,28 @@ def test_extract_slots(client):
     mid = "Модуль_распоряжения_о_рабочей_группе"
     r = client.post(f"/api/modules/{mid}/extract", json={"description": "рабочая группа по CRM"}).json()
     assert r["values"] == {"s1": "внедрению CRM-системы", "s7": "15.12.2026"}
+
+
+def test_template_and_remarks(client):
+    r = client.get("/api/modules/Модуль_приказа_о_вводе_ИС/template")
+    assert r.status_code == 200 and len(r.content) > 1000
+    r = client.get("/api/remarks-template")
+    assert r.status_code == 200
+
+
+def test_check_detects_module_and_leftovers(client):
+    src = modules.module_path("Модуль_приказа_о_вводе_ИС")
+    r = client.post("/api/check", files={"file": ("p.docx", src.read_bytes())}).json()
+    assert r["module"]["id"] == "Модуль_приказа_о_вводе_ИС"
+    assert any("МОДУЛЬНЫЙ" in i["message"] for i in r["issues"])
+    assert r["next_steps"]
+
+
+def test_intents(client):
+    r = client.post("/api/ask", json={"question": "Мне нужно подготовить приказ о вводе информационной системы в эксплуатацию. Что для этого нужно сделать?"}).json()
+    assert {a["type"] for a in r["actions"]} == {"draft", "template"}
+    assert "Департамент информационной безопасности" in r["answer"]
+    r = client.post("/api/ask", json={"question": "Я подготовил приказ на основе модуля. Проверь его"}).json()
+    assert r["actions"][0]["type"] == "check"
+    r = client.post("/api/ask", json={"question": "Как оформить реестр замечаний к проекту документа?"}).json()
+    assert any(a["type"] == "remarks" for a in r["actions"])

@@ -370,3 +370,92 @@ def check_draft(path: Path) -> list[dict]:
     add(re.search(r"^О[б]?\s", text, re.M) is not None, "Не найден заголовок к тексту (начинается с «О…»).",
         "п. 8 Инструкции (реквизит «заголовок к тексту»)")
     return issues
+
+
+def _norm(t: str) -> str:
+    return re.sub(r"\s+", " ", t.replace("ё", "е")).strip().lower()
+
+
+def _constant_pieces(module_id: str) -> list[str]:
+    """Постоянные формулировки модуля: текст между полями, без служебных пометок."""
+    d = docx.Document(str(module_path(module_id)))
+    pieces = []
+    for p in _body_paragraphs(d):
+        t = re.sub(r"\s*\[\d+\]", "", p.text)
+        if any(w in t for w in ("НЕ УДАЛЯТЬ", "МОДУЛЬНЫЙ", "ГЕРБ", "место для изображения", "И. О. Фамилия")):
+            continue
+        for piece in BLANK_RE.split(t):
+            piece = piece.strip(" .,:;«»()")
+            if len(piece) >= 15:
+                pieces.append(piece)
+    return pieces
+
+
+def analyze_draft(path: Path) -> dict:
+    """Проверка проекта: какой модуль, что не заполнено/не удалено, изменены ли постоянные формулировки."""
+    issues = check_draft(path)
+    d = docx.Document(str(path))
+    text = _norm(" ".join(p.text for p in _all_paragraphs(d)))
+    best, best_score, missing = None, 0.0, []
+    for m in list_modules():
+        pieces = _constant_pieces(m["id"])
+        if not pieces:
+            continue
+        miss = [x for x in pieces if _norm(x) not in text]
+        score = 1 - len(miss) / len(pieces)
+        if score > best_score:
+            best, best_score, missing = m, score, miss
+    result = {"issues": issues, "module": None, "match": 0, "next_steps": []}
+    if best and best_score >= 0.5:
+        result["module"] = {"id": best["id"], "title": best["title"], "kind": best["kind"]}
+        result["match"] = round(best_score * 100)
+        for x in missing[:5]:
+            issues.append({"message": f"Постоянная формулировка модуля изменена или удалена: «{x[:90]}». "
+                           "Такой проект считается отличающимся от модуля и проходит полное согласование по главе 10 Инструкции.",
+                           "ref": "Методические рекомендации, п. 1.3"})
+    else:
+        issues.append({"message": "Не удалось сопоставить проект ни с одним модулем — проверка постоянных формулировок не выполнена.",
+                       "ref": "Методические рекомендации, п. 4.1"})
+    result["next_steps"] = [
+        {"text": "Сверьте проект с модулем и завизируйте как ответственный исполнитель", "ref": "Методические рекомендации, п. 4.1"},
+        {"text": "Визирование: исполнитель и руководитель подразделения → лингвистическая экспертиза → Департамент ДОУ", "ref": "Методические рекомендации, п. 4.2"},
+        {"text": "Подписание в ИИС ДО должностным лицом с полномочиями", "ref": "Методические рекомендации, п. 5.1"},
+        {"text": "Регистрация, затем рассылка и контроль в общем порядке Инструкции", "ref": "Методические рекомендации, п. 5.2–5.3"},
+    ]
+    row = MATRIX_ROW.get(best["id"]) if result["module"] else None
+    if row:
+        result["matrix"] = {"group": row[0], "row": row[1]}
+    return result
+
+
+REMARKS_COLUMNS = ["№ замечания", "Автор замечания и подразделение", "Структурная единица или фрагмент ПД",
+                   "Содержание замечания", "Предложенная редакция", "Позиция ответственного исполнителя",
+                   "Результат (принято / частично принято / отклонено)", "Обоснование результата",
+                   "Признак неурегулированного замечания"]
+
+
+def remarks_template() -> Path:
+    """Таблица замечаний по Приложению № 1 к Инструкции (графы 1–9)."""
+    from docx.enum.section import WD_ORIENT
+    from docx.shared import Pt
+    d = docx.Document()
+    sec = d.sections[0]
+    sec.orientation = WD_ORIENT.LANDSCAPE
+    sec.page_width, sec.page_height = sec.page_height, sec.page_width
+    d.add_paragraph("ТАБЛИЦА ЗАМЕЧАНИЙ").runs[0].bold = True
+    d.add_paragraph("к проекту документа: ______________________________ (версия ПД: ____)")
+    d.add_paragraph("Форма — Приложение № 1 к Инструкции по документационному обеспечению управления "
+                    "и документообороту Организации; работа с замечаниями — пункты 10.2, 10.5, 10.8, 10.9 Инструкции.")
+    t = d.add_table(rows=1 + 5, cols=len(REMARKS_COLUMNS))
+    t.style = "Table Grid"
+    for i, name in enumerate(REMARKS_COLUMNS):
+        cell = t.rows[0].cells[i]
+        cell.text = f"{i + 1}. {name}" if i else name
+        for r in cell.paragraphs[0].runs:
+            r.bold, r.font.size = True, Pt(9)
+    for n in range(1, 6):
+        t.rows[n].cells[0].text = str(n)
+    config.OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    out = config.OUTPUT_DIR / "Таблица_замечаний.docx"
+    d.save(str(out))
+    return out

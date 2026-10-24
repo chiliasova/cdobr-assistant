@@ -212,6 +212,24 @@ def module_fill(module_id: str, body: Fill, u=Depends(current_user)):
             "check": modules.check_draft(path)}
 
 
+@app.get("/api/modules/{module_id}/template")
+def module_template(module_id: str, u=Depends(current_user)):
+    """Пустой модуль — для тех, кто заполняет сам."""
+    try:
+        p = modules.module_path(module_id)
+    except KeyError:
+        raise HTTPException(404)
+    return FileResponse(p, filename=p.name,
+                        media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document")
+
+
+@app.get("/api/remarks-template")
+def remarks_template(u=Depends(current_user)):
+    p = modules.remarks_template()
+    return FileResponse(p, filename=p.name,
+                        media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document")
+
+
 @app.get("/api/drafts/{name}")
 def draft(name: str, u=Depends(current_user)):
     p = (config.OUTPUT_DIR / name).resolve()
@@ -249,7 +267,7 @@ async def check(file: UploadFile = File(...), u=Depends(current_user)):
     with tempfile.NamedTemporaryFile(suffix=".docx", delete=False) as tmp:
         tmp.write(await file.read())
     try:
-        return {"issues": modules.check_draft(Path(tmp.name))}
+        return modules.analyze_draft(Path(tmp.name))
     finally:
         Path(tmp.name).unlink(missing_ok=True)
 

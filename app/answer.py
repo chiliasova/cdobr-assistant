@@ -20,7 +20,9 @@ SYSTEM = """Ты — помощник сотрудника по Инструкц
 Правила:
 - Фрагменты отсортированы по близости к вопросу: первый — самый подходящий.
 - Начни с главного: срок, действие или ответственный. Без вступлений.
-- Пиши просто и коротко: 2–4 предложения.
+- Пиши просто и коротко: 2–4 предложения. Если спрашивают «как сделать» или «что нужно сделать» — дай нумерованные шаги (не больше 6), по одной ссылке на шаг.
+- Если вопрос из нескольких частей и на какую-то часть во фрагментах ответа нет, так и напиши: «В Инструкции это не регламентировано» — и не давай своих советов по этой части.
+- Если ответ зависит от вида документа (приказ, распоряжение, положение, письмо), а вид не назван — дай общий порядок и в конце попроси уточнить вид документа.
 - После каждого предложения ставь ссылку на фрагмент, из которого оно взято, в квадратных скобках точно как в заголовке фрагмента, например [п. 10.3]. Не ссылайся на фрагмент, в котором этого нет.
 - Сроки, числа, условия («для документов от органов власти» и т. п.) и названия подразделений переписывай точно как во фрагменте.
 - Если во фрагментах нет ответа на вопрос, ответь ровно: НЕТ ОТВЕТА"""
@@ -105,12 +107,21 @@ def _query(question: str, history: list[dict]) -> str:
     return (prev[0] + " " + question) if prev and len(question) < 60 else question
 
 
-def _draft_answer(module: dict) -> str:
-    """Просьба подготовить документ: отвечаем без LLM — шаблоном и маршрутом из Матрицы."""
-    text = (f"Для этого есть модуль «{module['title']}». Нажмите «Подготовить черновик»: опишите ситуацию "
-            "своими словами, я разложу её по полям шаблона, а вы проверите их перед выгрузкой в .docx. "
-            "Проект, строго соответствующий модулю, не направляется на повторное полное согласование "
-            "[Методические рекомендации, п. 1.3].")
+CHECK_RE = re.compile(r"провер(ь|ьте|ить|ка)\b.*(приказ|распоряж|проект|документ|черновик)|"
+                      r"(приказ|распоряж|проект|документ).*провер(ь|ьте|ить)", re.I)
+REMARKS_RE = re.compile(r"замечани.*(реестр|таблиц|собрат|оформ|свод)|(реестр|таблиц|свод).*замечани", re.I)
+
+NEXT_STEPS = ("Дальше: сверьте проект с модулем и завизируйте его как ответственный исполнитель "
+              "[Методические рекомендации, п. 4.1]; пройдите визирование в установленной последовательности — "
+              "исполнитель и руководитель подразделения, лингвистическая экспертиза, Департамент ДОУ "
+              "[Методические рекомендации, п. 4.2]; затем подписание в ИИС ДО и регистрация "
+              "[Методические рекомендации, п. 5.1; Методические рекомендации, п. 5.2].")
+
+
+def _draft_suffix(module: dict) -> str:
+    """Добавка к ответу о подготовке документа: модуль и визы по Матрице (без LLM)."""
+    text = (f"Для такого документа есть модуль «{module['title']}». Проект, строго соответствующий модулю, "
+            "не направляется на повторное полное согласование [Методические рекомендации, п. 1.3].")
     row = modules.MATRIX_ROW.get(module["module_id"])
     if row:
         r = routing.route(*row)
@@ -118,7 +129,9 @@ def _draft_answer(module: dict) -> str:
         text += f" Обязательные визы: {', '.join(names)} [{r['ref']}]."
         if r["questions"]:
             text += (" Может понадобиться ещё виза по условию Матрицы («" + "», «".join(q["text"] for q in r["questions"])
-                     + "»): отметьте это на вкладке «Маршрут визирования».")
+                     + "») — отметьте это на вкладке «Маршрут визирования».")
+    text += (" Как удобнее: скачать пустой шаблон и заполнить самостоятельно или подготовить проект со мной — "
+             "я задам вопросы по каждому полю?")
     return text
 
 
@@ -128,11 +141,41 @@ def prepare(question: str, history: list[dict] | None = None) -> dict:
     best = hits[0]["relevance"] if hits else 0
     found = bool(best >= config.MIN_RELEVANCE)
     module = _module_hint(question, hits)
-    direct = _draft_answer(module) if module and found else None
-    # Шаблоны модулей сбивают модель на обычных вопросах — в контекст их не берём
-    hits = [h for h in hits if h["source"] != "module"][:config.TOP_K] if not module else hits[:config.TOP_K]
-    return {"hits": hits, "found": found, "module": module, "direct": direct,
-            "route": _route_hint(hits),
+    direct, suffix, actions = None, "", []
+    if CHECK_RE.search(question):
+        # «Проверь мой проект» — без LLM: просим файл и сразу говорим, что дальше
+        found = True
+        direct = ("Загрузите проект в формате .docx — проверю незаполненные поля, оставшиеся элементы шаблона "
+                  "(линии, сноски, гриф «УТВЕРЖДАЮ», пометку «МОДУЛЬНЫЙ ДОКУМЕНТ»), сохранность служебных зон и "
+                  "совпадение постоянных формулировок с модулем [Методические рекомендации, п. 3.3]. " + NEXT_STEPS)
+        actions.append({"type": "check", "label": "Загрузить проект на проверку"})
+    elif module and found:
+        suffix = _draft_suffix(module)
+        actions += [{"type": "draft", "label": "Подготовить проект со мной", "module_id": module["module_id"]},
+                    {"type": "template", "label": "Скачать пустой шаблон", "module_id": module["module_id"]}]
+    if REMARKS_RE.search(question) and found:
+        suffix += (" Таблицу для сбора замечаний я подготовил по форме Приложения № 1 к Инструкции "
+                   "(номер, автор и подразделение, фрагмент ПД, содержание, предложенная редакция, позиция исполнителя, "
+                   "результат, обоснование, признак неурегулированного замечания) [Приложение № 1].")
+        actions.append({"type": "remarks", "label": "Скачать таблицу замечаний (Прил. № 1)"})
+    # Для типовых задач добираем фрагменты, без которых ответ неполный
+    ix = search.get_index()
+    extra = []
+    if module and found:
+        extra = ix.search(question + " порядок подготовки проекта на основе модуля карточка визирование",
+                          k=3, sources={"methodology"})
+    if REMARKS_RE.search(question):
+        extra = ix.search("таблица замечаний по приложению 1 систематизирует замечания повторное рассмотрение",
+                          k=3, sources={"instruction"})
+    seen = set()
+    merged = []
+    for h in extra + hits:
+        if h["id"] not in seen and h["source"] != "module":  # шаблоны сбивают модель, про модуль скажет suffix
+            seen.add(h["id"])
+            merged.append(h)
+    hits = merged[:config.TOP_K]
+    return {"hits": hits, "found": found, "module": module, "direct": direct, "suffix": suffix.strip(),
+            "actions": actions, "route": _route_hint(hits),
             "messages": [{"role": "system", "content": SYSTEM},
                          *[{"role": h["role"], "content": h["content"]} for h in history[-4:]],
                          {"role": "user", "content": f"Фрагменты:\n\n{_context(hits)}\n\nВопрос: {question}"}]}
@@ -151,7 +194,11 @@ def extractive(hits: list[dict], n: int = 2) -> str:
 
 def finalize(prep: dict, text: str | None) -> dict:
     res = _finalize(prep, text)
-    res["route"] = prep["route"] if res["status"] != "no_answer" else None
+    ok = res["status"] != "no_answer"
+    res["route"] = prep["route"] if ok else None
+    res["actions"] = prep["actions"] if ok else []
+    if ok and prep.get("suffix") and not prep.get("direct"):
+        res["answer"] += "\n\n" + prep["suffix"]
     return res
 
 
@@ -160,7 +207,7 @@ def _finalize(prep: dict, text: str | None) -> dict:
     if not prep["found"]:
         return {"answer": REFUSAL, "status": "no_answer", "sources": [], "module": None, "problems": []}
     if prep.get("direct"):
-        return {"answer": prep["direct"], "status": "verified", "sources": hits, "module": prep["module"],
+        return {"answer": prep["direct"], "status": "verified", "sources": [], "module": prep["module"],
                 "problems": []}
     if text is None:
         return {"answer": extractive(hits), "status": "extractive", "sources": hits,
