@@ -63,6 +63,9 @@ def clean(text: str, hits: list[dict]) -> str:
         parts = [p.strip() for p in re.split(r";\s*", m.group(1))]
         return "[" + "; ".join(alias.get(_norm_ref(p), p) if _norm_ref(p) not in known else p for p in parts) + "]"
     text = REF_RE.sub(fix, text).strip()
+    # «…в Инструкции не регламентировано [п. 3.2]» — ссылка на пункт, где этого нет, только путает
+    text = "\n".join(" ".join(REF_RE.sub("", x).replace(" .", ".").strip() if "не регламентирован" in x.lower() else x
+                               for x in SENT_RE.split(line)) for line in text.split("\n"))
     return _drop_cut_tail(text)
 
 
