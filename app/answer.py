@@ -21,7 +21,8 @@ SYSTEM = """Ты — помощник сотрудника по Инструкц
 - Фрагменты отсортированы по близости к вопросу: первый — самый подходящий.
 - Начни с главного: срок, действие или ответственный. Без вступлений.
 - Пиши просто и коротко: 2–4 предложения. Если спрашивают «как сделать» или «что нужно сделать» — дай нумерованные шаги (не больше 6), по одной ссылке на шаг.
-- Если вопрос из нескольких частей и на какую-то часть во фрагментах ответа нет, так и напиши: «В Инструкции это не регламентировано» — и не давай своих советов по этой части.
+- Если вопрос из нескольких частей и на какую-то часть во фрагментах ответа нет, так и напиши, назвав эту часть: «Как составить сопроводительное письмо, в Инструкции не регламентировано» — и не давай своих советов по этой части.
+- Не переноси правило для одного вида документа на другой: если во фрагменте не назван тот вид документа, о котором спрашивают, — это не ответ на вопрос.
 - Если ответ зависит от вида документа (приказ, распоряжение, положение, письмо), а вид не назван — дай общий порядок и в конце попроси уточнить вид документа.
 - После каждого предложения ставь ссылку на фрагмент, из которого оно взято, в квадратных скобках точно как в заголовке фрагмента, например [п. 10.3]. Не ссылайся на фрагмент, в котором этого нет.
 - Сроки, числа, условия («для документов от органов власти» и т. п.) и названия подразделений переписывай точно как во фрагменте.
@@ -34,6 +35,8 @@ REFUSAL = ("В Инструкции и связанных документах �
 DRAFT_RE = re.compile(r"подготов|состав(ь|ить)|сформир|созда(й|ть) (проект|черновик|приказ|распоряж)|"
                       r"черновик|шаблон|модул|оформи(ть)? (приказ|распоряж)", re.I)
 REF_RE = re.compile(r"\[([^\[\]]{2,120})\]")
+# конец предложения, но не «п. 3.2» и не «г. Москва»
+SENT_RE = re.compile(r"(?<=[.!?])(?<![\s\[(]п\.)(?<![\s\[(]г\.)\s+")
 NUM_RE = re.compile(r"\d+(?:[.,]\d+)*")
 
 
@@ -103,7 +106,7 @@ def _support_problems(answer: str, hits: list[dict]) -> list[str]:
     """Предложение со ссылкой должно по словам совпадать с пунктом, на который ссылается."""
     by_ref = {_norm_ref(h["ref"]): set(search.tokenize(h["title"] + " " + h["text"])) for h in hits}
     problems = []
-    for sent in re.split(r"(?<=[.!?])\s+", answer):
+    for sent in SENT_RE.split(answer):
         refs = [_norm_ref(p) for r in REF_RE.findall(sent) for p in re.split(r";\s*", r)]
         refs = [r for r in refs if r in by_ref]
         words = [w for w in search.tokenize(REF_RE.sub(" ", sent)) if not w.isdigit() and len(w) > 2]
@@ -116,8 +119,43 @@ def _support_problems(answer: str, hits: list[dict]) -> list[str]:
     return problems
 
 
+def _bigrams(text: str) -> set[tuple[str, str]]:
+    t = search.tokenize(text)
+    return set(zip(t, t[1:]))
+
+
+def _drop_foreign(text: str, hits: list[dict], question: str) -> str:
+    """Убираем предложения, где требование к одному виду документа перенесено на другой.
+
+    Если в предложении есть термин из вопроса («сопроводительное письмо»), а в пункте,
+    на который оно ссылается, этого термина нет — модель подставила чужое правило.
+    """
+    if not question:
+        return text
+    q = _bigrams(question)
+    by_ref = {_norm_ref(h["ref"]): _bigrams(h["title"] + " " + h["text"]) for h in hits}
+    kept, dropped = [], False
+    for line in text.split("\n"):
+        out = []
+        for sent in SENT_RE.split(line):
+            refs = [_norm_ref(p) for r in REF_RE.findall(sent) for p in re.split(r";\s*", r)]
+            src = set().union(*(by_ref[r] for r in refs if r in by_ref)) if refs else set()
+            terms = _bigrams(REF_RE.sub(" ", sent)) & q
+            if refs and terms and not (terms & src):
+                dropped = True
+                continue
+            out.append(sent)
+        if out or not line.strip():
+            kept.append(" ".join(out))
+    text = re.sub(r"\n{3,}", "\n\n", "\n".join(kept)).strip()
+    if dropped and "не регламентирован" not in text.lower():
+        text += "\n\nПо остальной части вопроса в Инструкции порядок не регламентирован."
+    return text
+
+
 def _module_hint(question: str, hits: list[dict]) -> dict | None:
-    if not DRAFT_RE.search(question):
+    # модули есть только для приказов и распоряжений: «как составить письмо» — не про модуль
+    if not DRAFT_RE.search(question) or not re.search(r"приказ|распоряж|модул|шаблон", question, re.I):
         return None
     ix = search.get_index()
     mods = ix.search(question, k=1, sources={"module"})
@@ -211,7 +249,7 @@ def prepare(question: str, history: list[dict] | None = None) -> dict:
         # визы по Матрице уже перечислены в suffix — строку таблицы модель только пересказывает с обрывом
         merged = [h for h in merged if h["source"] != "matrix"]
     hits = merged[:config.TOP_K]
-    return {"hits": hits, "found": found, "module": module, "direct": direct, "suffix": suffix.strip(),
+    return {"hits": hits, "found": found, "module": module, "direct": direct, "question": question, "suffix": suffix.strip(),
             "actions": actions, "route": route,
             "messages": [{"role": "system", "content": SYSTEM},
                          *[{"role": h["role"], "content": h["content"]} for h in history[-4:]],
@@ -265,6 +303,7 @@ def _finalize(prep: dict, text: str | None) -> dict:
     text = clean(text, hits)
     if "НЕТ ОТВЕТА" in text.upper() or not text:
         return {"answer": REFUSAL, "status": "no_answer", "sources": [], "module": None, "problems": []}
+    text = _drop_foreign(text, hits, prep.get("question", ""))
     problems = verify(text, hits)
     status = "verified" if not problems else "unverified"
     answer = text
