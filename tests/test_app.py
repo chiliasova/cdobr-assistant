@@ -92,3 +92,8 @@ def test_route_working_group():
     assert "Юридическое подразделение" not in names
     r = routing.route("Внутренние документы", 6, {})
     assert "Департамент информационных технологий" not in [s["name"] for s in r["steps"]]
+
+
+def test_bad_date_warns():
+    _, warnings = modules.fill("Модуль_распоряжения_о_рабочей_группе", {"s7": "030101"})
+    assert any("не распознана" in w for w in warnings)

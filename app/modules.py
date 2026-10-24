@@ -292,7 +292,10 @@ def fill(module_id: str, values: dict[str, str]) -> tuple[Path, list[str]]:
             val = (values.get(sid) or "").strip()
             s = slots.get(sid)
             if s and s.kind == "date" and val and m is not None:
-                val = format_date(val, with_year=bool(YEAR_RE.search(m.group())))
+                formatted = format_date(val, with_year=bool(YEAR_RE.search(m.group())))
+                if formatted == val:
+                    warnings.append(f"Дата «{val}» в поле «{s.label}» не распознана — укажите в формате ДД.ММ.ГГГГ")
+                val = formatted
             if not val:
                 warnings.append(f"Не заполнено поле «{s.label if s else sid}»: {s.context if s else ''}")
                 val = m.group() if m else p.runs[ri].text
