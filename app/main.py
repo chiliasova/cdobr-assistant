@@ -125,7 +125,7 @@ def ask_stream(body: Ask, u=Depends(current_user)):
     def gen():
         yield _sse("sources", {"sources": prep["hits"], "found": prep["found"]})
         text = None
-        if prep["found"] and config.USE_LLM:
+        if prep["found"] and config.USE_LLM and not prep.get("direct"):
             try:
                 parts = []
                 for tok in llm.chat_stream(prep["messages"]):

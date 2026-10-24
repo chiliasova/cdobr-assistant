@@ -9,16 +9,17 @@ from __future__ import annotations
 
 import re
 
-from . import config, llm, search
+from . import config, llm, modules, routing, search
 
 SYSTEM = """Ты — помощник сотрудника по Инструкции о документообороте Организации.
 Отвечай ТОЛЬКО по фрагментам ниже. Ничего не придумывай.
 Правила:
-- Пиши просто и коротко: 2–5 предложений, без вступлений.
-- После каждого утверждения ставь ссылку на источник в квадратных скобках точно как в заголовке фрагмента, например [п. 10.3].
-- Сроки, числа и названия подразделений переписывай точно как во фрагменте.
-- Если во фрагментах нет ответа на вопрос, ответь ровно: НЕТ ОТВЕТА
-- Если из фрагментов понятно, кто отвечает за вопрос, в конце добавь строку «Куда обратиться: …»."""
+- Фрагменты отсортированы по близости к вопросу: первый — самый подходящий.
+- Начни с главного: срок, действие или ответственный. Без вступлений.
+- Пиши просто и коротко: 2–4 предложения.
+- После каждого предложения ставь ссылку на фрагмент, из которого оно взято, в квадратных скобках точно как в заголовке фрагмента, например [п. 10.3]. Не ссылайся на фрагмент, в котором этого нет.
+- Сроки, числа, условия («для документов от органов власти» и т. п.) и названия подразделений переписывай точно как во фрагменте.
+- Если во фрагментах нет ответа на вопрос, ответь ровно: НЕТ ОТВЕТА"""
 
 REFUSAL = ("В Инструкции и связанных документах я не нашёл ответа на этот вопрос. "
            "Чтобы не ввести вас в заблуждение, не буду отвечать наугад. "
@@ -49,12 +50,30 @@ def verify(answer: str, hits: list[dict]) -> list[str]:
         for part in re.split(r";\s*", r):
             if _norm_ref(part) not in known:
                 problems.append(f"ссылка [{part}] не из найденных фрагментов")
+    problems += _support_problems(answer, hits)
     body = REF_RE.sub(" ", answer)
     src = " ".join(h["text"] + " " + h["ref"] for h in hits)
     src_nums = set(NUM_RE.findall(src))
     for n in NUM_RE.findall(body):
         if n not in src_nums:
             problems.append(f"число {n} не найдено в источниках")
+    return problems
+
+
+def _support_problems(answer: str, hits: list[dict]) -> list[str]:
+    """Предложение со ссылкой должно по словам совпадать с пунктом, на который ссылается."""
+    by_ref = {_norm_ref(h["ref"]): set(search.tokenize(h["title"] + " " + h["text"])) for h in hits}
+    problems = []
+    for sent in re.split(r"(?<=[.!?])\s+", answer):
+        refs = [_norm_ref(p) for r in REF_RE.findall(sent) for p in re.split(r";\s*", r)]
+        refs = [r for r in refs if r in by_ref]
+        words = [w for w in search.tokenize(REF_RE.sub(" ", sent)) if not w.isdigit() and len(w) > 2]
+        if not refs or len(words) < 3:
+            continue
+        src = set().union(*(by_ref[r] for r in refs))
+        share = sum(w in src for w in words) / len(words)
+        if share < 0.45:
+            problems.append(f"предложение не подтверждается {', '.join(refs)}: «{sent[:60]}…»")
     return problems
 
 
@@ -82,12 +101,33 @@ def _query(question: str, history: list[dict]) -> str:
     return (prev[0] + " " + question) if prev and len(question) < 60 else question
 
 
+def _draft_answer(module: dict) -> str:
+    """Просьба подготовить документ: отвечаем без LLM — шаблоном и маршрутом из Матрицы."""
+    text = (f"Для этого есть модуль «{module['title']}». Нажмите «Подготовить черновик»: опишите ситуацию "
+            "своими словами, я разложу её по полям шаблона, а вы проверите их перед выгрузкой в .docx. "
+            "Проект, строго соответствующий модулю, не направляется на повторное полное согласование "
+            "[Методические рекомендации, п. 1.3].")
+    row = modules.MATRIX_ROW.get(module["module_id"])
+    if row:
+        r = routing.route(*row)
+        names = [s["name"] for s in r["steps"] if s["stage"] == "визирование"]
+        text += f" Обязательные визы: {', '.join(names)} [{r['ref']}]."
+        if r["questions"]:
+            text += (" Может понадобиться ещё виза по условию Матрицы («" + "», «".join(q["text"] for q in r["questions"])
+                     + "»): отметьте это на вкладке «Маршрут визирования».")
+    return text
+
+
 def prepare(question: str, history: list[dict] | None = None) -> dict:
     history = history or []
-    hits = search.get_index().search(_query(question, history), k=config.TOP_K)
+    hits = search.get_index().search(_query(question, history), k=config.TOP_K + 2)
     best = hits[0]["relevance"] if hits else 0
     found = bool(best >= config.MIN_RELEVANCE)
-    return {"hits": hits, "found": found, "module": _module_hint(question, hits),
+    module = _module_hint(question, hits)
+    direct = _draft_answer(module) if module and found else None
+    # Шаблоны модулей сбивают модель на обычных вопросах — в контекст их не берём
+    hits = [h for h in hits if h["source"] != "module"][:config.TOP_K] if not module else hits[:config.TOP_K]
+    return {"hits": hits, "found": found, "module": module, "direct": direct,
             "route": _route_hint(hits),
             "messages": [{"role": "system", "content": SYSTEM},
                          *[{"role": h["role"], "content": h["content"]} for h in history[-4:]],
@@ -114,14 +154,15 @@ def finalize(prep: dict, text: str | None) -> dict:
 def _finalize(prep: dict, text: str | None) -> dict:
     hits = prep["hits"]
     if not prep["found"]:
-        return {"answer": REFUSAL, "status": "no_answer", "sources": hits[:3], "module": prep["module"],
+        return {"answer": REFUSAL, "status": "no_answer", "sources": [], "module": None, "problems": []}
+    if prep.get("direct"):
+        return {"answer": prep["direct"], "status": "verified", "sources": hits, "module": prep["module"],
                 "problems": []}
     if text is None:
         return {"answer": extractive(hits), "status": "extractive", "sources": hits,
                 "module": prep["module"], "problems": ["LLM недоступна — показаны дословные пункты"]}
     if "НЕТ ОТВЕТА" in text.upper():
-        return {"answer": REFUSAL, "status": "no_answer", "sources": hits[:3], "module": prep["module"],
-                "problems": []}
+        return {"answer": REFUSAL, "status": "no_answer", "sources": [], "module": None, "problems": []}
     problems = verify(text, hits)
     status = "verified" if not problems else "unverified"
     answer = text
@@ -133,7 +174,7 @@ def _finalize(prep: dict, text: str | None) -> dict:
 def ask(question: str, history: list[dict] | None = None) -> dict:
     prep = prepare(question, history)
     text = None
-    if prep["found"] and config.USE_LLM:
+    if prep["found"] and config.USE_LLM and not prep.get("direct"):
         try:
             text = llm.chat(prep["messages"])
         except Exception:

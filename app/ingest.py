@@ -54,8 +54,9 @@ def parse_instruction(path: Path) -> list[Chunk]:
     chunks: list[Chunk] = []
     chapter_no, chapter_title = 0, ""
     cur_id, cur_lines = None, []
-    last_num: tuple[int, ...] = ()
-    in_chapter_title = False
+    seen: set[str] = set()
+    title_lines = 0          # строк заголовка главы после «Глава N.»
+    preamble: list[str] = []  # текст между заголовком и первым пунктом (PDF местами перемешан)
     appendix: list[str] | None = None
 
     def flush():
@@ -85,20 +86,26 @@ def parse_instruction(path: Path) -> list[Chunk]:
         if m:
             flush()
             chapter_no, chapter_title = int(m.group(1)), m.group(2).strip()
-            in_chapter_title = True
+            title_lines, preamble = 0, []
             continue
         m = POINT_RE.match(line)
         if m:
-            num = tuple(int(x) for x in m.group(1).split("."))
-            # «по пункту 2.13.» в конце строки внутри другого пункта — не новый пункт
-            if chapter_no and num[0] == chapter_no and num > last_num:
+            num = m.group(1)
+            # «по пункту 2.13.» в начале строки внутри пункта другой главы — не новый пункт.
+            # Порядок не проверяем: в PDF встречается 4.1.1 перед 4.1.
+            if chapter_no and int(num.split(".")[0]) == chapter_no and num not in seen:
                 flush()
-                in_chapter_title = False
-                cur_id, last_num = m.group(1), num
-                cur_lines = [m.group(2)]
+                seen.add(num)
+                cur_id, cur_lines = num, preamble + [m.group(2)]
+                preamble = []
                 continue
-        if in_chapter_title and cur_id is None:
-            chapter_title += " " + line.strip()
+        if chapter_no and cur_id is None:
+            # одна строка — продолжение заголовка главы, остальное — к первому пункту
+            if title_lines == 0 and not line.startswith("•"):
+                chapter_title += " " + line.strip()
+                title_lines = 1
+            else:
+                preamble.append(line)
             continue
         if cur_id:
             cur_lines.append(line)
