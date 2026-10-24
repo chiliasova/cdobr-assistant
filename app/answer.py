@@ -199,25 +199,40 @@ def extract_slots(description: str, slots: list[dict]) -> dict[str, str]:
     строгого JSON на Windows зацикливалась и обрывала ответ.
     """
     fields = "\n".join(
-        f"{s['id']} — {s['label']}: «…{s['context'][-50:]} ___»"
-        + (f" (варианты: {' / '.join(s['options'])})" if s.get("options") else "")
-        + (" (дата ДД.ММ.ГГГГ)" if s["kind"] == "date" else "")
+        f"{s['id']} ({s['label']}): «{s['context'][-50:]} ___ {s.get('after', '')}»"
+        + (f"; варианты: {' / '.join(s['options'])}" if s.get("options") else "")
+        + ("; дата ДД.ММ.ГГГГ" if s["kind"] == "date" else "")
         for s in slots)
     msgs = [
         {"role": "system", "content": "Ты заполняешь поля шаблона документа по описанию пользователя. "
          "Бери сведения только из описания, ничего не придумывай. "
          "Значение должно грамматически продолжать текст перед ___ (нужный падеж). "
-         "Ответ — по одной строке на поле в формате «s1: значение». Если сведений нет — «s1: -». "
-         "Больше ничего не пиши."},
+         "Ответ — по одной строке на поле в формате «s1: значение». В значении пиши только то, "
+         "что встанет на место пропуска, без текста перед ним. Если сведений нет — «s1: -». "
+         "Пример: для поля «s5 (Контроль): «возложить на ___ .»» ответ "
+         "«s5: начальника Управления делами Петрова П. П.». Больше ничего не пиши."},
         {"role": "user", "content": f"Поля:\n{fields}\n\nОписание:\n{description}"},
     ]
     t = time.time()
     text = llm.chat(msgs, max_tokens=60 * len(slots) + 100)
     log.info("Поля модуля заполнены за %.1f с", time.time() - t)
-    ids = {s["id"] for s in slots}
+    by_id = {s["id"]: s for s in slots}
     out = {}
     for sid, val in LINE_RE.findall(text):
-        val = val.strip(" «»\"'")
-        if sid in ids and sid not in out and val.lower().strip(".") not in EMPTY:
+        if sid not in by_id or sid in out:
+            continue
+        val = _strip_echo(val, by_id[sid]["context"])
+        if val.lower().strip(".") not in EMPTY:
             out[sid] = val
     return out
+
+
+def _strip_echo(val: str, context: str) -> str:
+    """Модель иногда повторяет текст перед пропуском («…возложить на директора…») — убираем его."""
+    val = val.strip(" «»\"'")
+    for piece in (context, context[-50:], context.split(":")[-1]):
+        piece = piece.strip(" …")
+        if len(piece) >= 3 and piece in val:
+            val = val[val.rindex(piece) + len(piece):]
+    val = re.sub(r"_{2,}|…", " ", val)
+    return re.sub(r"\s+", " ", val).strip(" :«»\"'")

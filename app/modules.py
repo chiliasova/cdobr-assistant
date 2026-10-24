@@ -48,6 +48,7 @@ class Slot:
     hint: str        # пояснение из примечаний
     context: str     # текст перед полем, чтобы было понятно, куда оно встанет
     options: list[str] | None = None
+    after: str = ""  # текст сразу после поля
 
 
 def _all_paragraphs(d: Document):
@@ -255,7 +256,9 @@ def get_slots(module_id: str) -> list[Slot]:
                 label = row
             if not label:
                 label = "Заголовок" if re.match(r"^О[б]?\s", p.text.strip()) else "Поле"
-            slots.append(Slot(f"s{k}", kind, fn, label, hint, ctx, opts))
+            tail = (run_text[m.end():] if m else "") + "".join(r.text for r in p.runs[ri + 1:])
+            tail = re.sub(r"\s*\[\d+\]", "", BLANK_RE.sub("…", tail)).strip()[:40]
+            slots.append(Slot(f"s{k}", kind, fn, label, hint, ctx, opts, tail))
     return slots
 
 
@@ -302,7 +305,13 @@ def fill(module_id: str, values: dict[str, str]) -> tuple[Path, list[str]]:
             repl.append((ri, m, val))
         for ri, m, val in sorted(repl, key=lambda x: (x[0], x[1].start() if x[1] else 0), reverse=True):
             r = p.runs[ri]
-            r.text = r.text[: m.start()] + val + r.text[m.end():] if m else val
+            if m:
+                after = r.text[m.end():]
+                if val.endswith(".") and after.lstrip().startswith("."):
+                    val = val[:-1]  # «Кузнецова В. В.» + «.» шаблона
+                r.text = r.text[: m.start()] + val + after
+            else:
+                r.text = val
         for r in p.runs:
             if _is_mark(r) is not None:
                 r.text = ""
