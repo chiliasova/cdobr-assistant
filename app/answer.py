@@ -25,7 +25,8 @@ SYSTEM = """Ты — помощник сотрудника по Инструкц
 - Не переноси правило для одного вида документа на другой: если во фрагменте не назван тот вид документа, о котором спрашивают, — это не ответ на вопрос.
 - Если ответ зависит от вида документа (приказ, распоряжение, положение, письмо), а вид не назван — дай общий порядок и в конце попроси уточнить вид документа.
 - После каждого предложения ставь ссылку на фрагмент, из которого оно взято, в квадратных скобках точно как в заголовке фрагмента, например [п. 10.3]. Не ссылайся на фрагмент, в котором этого нет.
-- Сроки, числа, условия («для документов от органов власти» и т. п.) и названия подразделений переписывай точно как во фрагменте.
+- Сроки, числа, условия («для документов от органов власти» и т. п.) и названия подразделений переписывай точно как во фрагменте. Если срок действует только для части документов (например, «поступающие от органов государственной власти»), назови это условие в том же предложении.
+- Не добавляй общие положения, которые не отвечают на вопрос.
 - Если фрагменты описывают общий порядок, который применим к вопросу (например, согласование любого проекта документа), — отвечай по ним, это и есть ответ.
 - Если во фрагментах нет ответа на вопрос, ответь ровно: НЕТ ОТВЕТА"""
 
@@ -104,6 +105,31 @@ def verify(answer: str, hits: list[dict]) -> list[str]:
         if n not in src_nums:
             problems.append(f"число {n} не найдено в источниках")
     return problems
+
+
+COND_RE = re.compile(r"(?:поступающ|направляем|адресуем|подготовленн|исходящ|входящ)\w*\s+(?:от|в|из|для|без)\s+[^,.;—«]+", re.I)
+
+
+def condition_problems(answer: str, hits: list[dict]) -> list[str]:
+    """Число из пункта пересказано без условия, при котором оно действует.
+
+    П. 6.7: «Документы, поступающие от органов государственной власти с отметкой «Срочно», — 3 рабочих дня».
+    Ответ «Документы с отметкой «Срочно» — 3 рабочих дня» теряет условие и вводит в заблуждение.
+    """
+    problems = []
+    src_sents = [x for h in hits for x in SENT_RE.split(h["text"])]
+    for sent in SENT_RE.split(answer):
+        body = REF_RE.sub(" ", sent)
+        words = set(search.tokenize(body))
+        for n in set(NUM_RE.findall(body)):
+            for ss in src_sents:
+                if not re.search(rf"(?<![\d.]){re.escape(n)}(?![\d])", ss):
+                    continue
+                for cond in COND_RE.findall(ss):
+                    need = [w for w in search.tokenize(cond) if len(w) > 3]
+                    if need and sum(w in words for w in need) / len(need) < 0.6:
+                        problems.append(f"условие «{cond.strip()}» потеряно")
+    return sorted(set(problems))
 
 
 def _support_problems(answer: str, hits: list[dict]) -> list[str]:
@@ -408,6 +434,14 @@ def _finalize(prep: dict, text: str | None) -> dict:
                     "problems": []}
         return {"answer": REFUSAL, "status": "no_answer", "sources": [], "module": None, "problems": []}
     text = _drop_foreign(text, hits, prep.get("question", ""))
+    lost = condition_problems(text, hits)
+    if lost:
+        # срок без условия хуже, чем отсутствие пересказа: показываем пункты дословно
+        conds = [re.search(r"«(.+)»", p).group(1) for p in lost]
+        cited = [h for h in hits if any(c in h["text"] for c in conds)] or hits
+        return {"answer": "Срок зависит от условий, поэтому привожу пункт дословно:\n\n"
+                + "\n\n".join(f"{h['text']} [{h['ref']}]" for h in cited[:1]),
+                "status": "extractive", "sources": hits, "module": prep["module"], "problems": lost}
     problems = verify(text, hits)
     status = "verified" if not problems else "unverified"
     answer = text

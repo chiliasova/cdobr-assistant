@@ -189,3 +189,13 @@ def test_approval_suffix_terms():
     assert "10 рабочих дней" in s and "[п. 10.3]" in s
     s = answer._approval_suffix("Как организовать согласование большого документа?")
     assert "Уточните вид документа" in s and "15 рабочих дней" in s
+
+
+def test_lost_condition_gives_verbatim():
+    from app import answer
+    hit = {"id": "instr:6.7", "source": "instruction", "ref": "п. 6.7", "title": "Глава 6", "relevance": 0.7, "meta": {},
+           "text": "Документы, поступающие от органов государственной власти с отметкой «Срочно», должны быть исполнены в течение 3 (трех) рабочих дней."}
+    other = {**hit, "id": "instr:10.14", "ref": "п. 10.14", "text": "Участники должны соблюдать предельно установленные сроки."}
+    prep = {"hits": [other, hit], "found": True, "module": None, "direct": None, "suffix": "", "actions": [], "route": None}
+    r = answer.finalize(prep, "Документы с отметкой «Срочно» исполняются в течение 3 рабочих дней [п. 6.7].")
+    assert r["status"] == "extractive" and "органов государственной власти" in r["answer"] and "[п. 6.7]" in r["answer"]
