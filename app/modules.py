@@ -20,6 +20,7 @@ from docx.text.paragraph import Paragraph
 from . import config
 
 BLANK_RE = re.compile(r"«_+»\s*_+\s*20_+\s*г\.|«_+»\s*_+|_{3,}|\[[^\[\]]*?/[^\[\]]*?\]")
+CHOICE_RE = re.compile(r"([а-яё]{4,}) / ([а-яё]{4,})")
 MARK_RE = re.compile(r"^\s*\[(\d+)\]\s*$")
 DATE_RE = re.compile(r"^«_+»")
 YEAR_RE = re.compile(r"20_+\s*г\.$")
@@ -242,7 +243,12 @@ def get_slots(module_id: str) -> list[Slot]:
             before = re.sub(r"\s*\[\d+\]", "", BLANK_RE.sub("…", before)).strip()
             row = _row_label(p)
             ctx = (f"{row}: " if row else "") + before[-70:]
-            if m is None:
+            if m is None and CHOICE_RE.search(run_text):
+                # «разработанного / измененного [5]» — выбор слова, а не пропуск
+                kind = "choice"
+                opts = list(CHOICE_RE.search(run_text).groups())
+                ctx = before[-70:]
+            elif m is None:
                 kind, opts = "placeholder", None
                 ctx = (ctx + " " + run_text.strip()).strip()[-70:]
             elif DATE_RE.match(m.group()):
@@ -258,6 +264,11 @@ def get_slots(module_id: str) -> list[Slot]:
                 label = "Заголовок" if re.match(r"^О[б]?\s", p.text.strip()) else "Поле"
             tail = (run_text[m.end():] if m else "") + "".join(r.text for r in p.runs[ri + 1:])
             tail = re.sub(r"\s*\[\d+\]", "", BLANK_RE.sub("…", tail)).strip()[:40]
+            if not tail:
+                # поле в конце абзаца («2. ___»): продолжение — в следующем абзаце («обеспечить …»)
+                nxt = p._p.getnext()
+                if nxt is not None and nxt.tag.endswith("}p") and re.match(r"\s*[а-яё]", Paragraph(nxt, p._parent).text):
+                    tail = re.sub(r"\s*\[\d+\]", "", BLANK_RE.sub("…", Paragraph(nxt, p._parent).text)).strip()[:40]
             slots.append(Slot(f"s{k}", kind, fn, label, hint, ctx, opts, tail))
     return slots
 
@@ -302,14 +313,20 @@ def fill(module_id: str, values: dict[str, str]) -> tuple[Path, list[str]]:
             if not val:
                 warnings.append(f"Не заполнено поле «{s.label if s else sid}»: {s.context if s else ''}")
                 val = m.group() if m else p.runs[ri].text
-            repl.append((ri, m, val))
-        for ri, m, val in sorted(repl, key=lambda x: (x[0], x[1].start() if x[1] else 0), reverse=True):
+            repl.append((ri, m, val, s))
+        for ri, m, val, s in sorted(repl, key=lambda x: (x[0], x[1].start() if x[1] else 0), reverse=True):
             r = p.runs[ri]
             if m:
                 after = r.text[m.end():]
                 if val.endswith(".") and after.lstrip().startswith("."):
                     val = val[:-1]  # «Кузнецова В. В.» + «.» шаблона
                 r.text = r.text[: m.start()] + val + after
+            elif s and s.kind == "choice" and CHOICE_RE.search(r.text):
+                pick = next((o for o in s.options or [] if o.lower() in val.lower()), None)
+                if pick:
+                    r.text = CHOICE_RE.sub(pick, r.text, count=1)
+                else:
+                    warnings.append(f"В поле «{s.label}» выберите один из вариантов: {' / '.join(s.options or [])}")
             else:
                 r.text = val
         for r in p.runs:

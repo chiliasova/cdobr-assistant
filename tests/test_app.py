@@ -158,3 +158,15 @@ def test_step_numbers_not_checked():
     hits = [{"ref": "п. 6.7", "title": "Сроки", "text": "Срочный документ исполняется в течение трех рабочих дней."}]
     t = "1. Срочный документ исполняется в течение трех рабочих дней [п. 6.7].\n2. Срочный документ исполняется в течение трех рабочих дней [п. 6.7]."
     assert not any("число" in p for p in answer.verify(t, hits))
+
+
+def test_word_choice_and_quotes():
+    import docx
+    from app import answer, modules
+    s5 = next(s for s in modules.get_slots("Модуль_приказа_о_вводе_ИС") if s.label == "Разработка или изменение")
+    assert s5.kind == "choice" and s5.options == ["разработанного", "измененного"]
+    p, _ = modules.fill("Модуль_приказа_о_вводе_ИС", {"s4": answer._strip_echo("ЭАД)", "(далее -", "»), разработанного"),
+                                                      s5.id: "Разработанного"})
+    text = "\n".join(x.text for x in docx.Document(str(p)).paragraphs)
+    assert "(далее - «ЭАД»), разработанного в соответствии" in text
+    assert answer._strip_echo("системы «Архив документов", "О вводе в эксплуатацию", "") == "системы «Архив документов»"

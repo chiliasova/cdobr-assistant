@@ -305,7 +305,8 @@ def extract_slots(description: str, slots: list[dict]) -> dict[str, str]:
     msgs = [
         {"role": "system", "content": "Ты заполняешь поля шаблона документа по описанию пользователя. "
          "Бери сведения только из описания, ничего не придумывай. "
-         "Значение должно грамматически продолжать текст перед ___ (нужный падеж). "
+         "Значение должно грамматически продолжать текст перед ___ и согласовываться с текстом после "
+         "(нужный падеж: «___ обеспечить» — кому? «Департаменту ИТ»). Для полей с вариантами выбери ровно один вариант. "
          "Ответ — по одной строке на поле в формате «s1: значение». В значении пиши только то, "
          "что встанет на место пропуска, без текста перед ним. Если сведений нет — «s1: -». "
          "Пример: для поля «s5 (Контроль): «возложить на ___ .»» ответ "
@@ -322,6 +323,9 @@ def extract_slots(description: str, slots: list[dict]) -> dict[str, str]:
             continue
         slot = by_id[sid]
         val = _strip_echo(val, slot["context"], slot.get("after", ""), slot["kind"])
+        if slot.get("options"):
+            # выбор из вариантов шаблона: принимаем только один из них
+            val = next((o for o in slot["options"] if o.lower() in val.lower()), "")
         # текстовое поле, в которое попала одна дата, — пусть заполнит человек
         if slot["kind"] != "date" and re.fullmatch(r"[\d.]+", val):
             continue
@@ -352,4 +356,14 @@ def _strip_echo(val: str, context: str, after: str = "", kind: str = "text") -> 
         m = re.search(r"\d{1,2}\.\d{1,2}\.\d{2,4}", val)
         val = m.group() if m else val
     val = re.sub(r"_{2,}|…", " ", val)
-    return re.sub(r"\s+", " ", val).strip(" :,«»\"'")
+    val = re.sub(r"\s+", " ", val).strip(" :,«»\"'")
+    if after.lstrip()[:1] in (")", "»"):
+        val = val.rstrip(")»")  # «ЭАД)» перед «»)» шаблона
+    # кавычки внутри значения должны быть парными: «… архива «Электронный архив»
+    if val.count("«") > val.count("»"):
+        val += "»"
+    elif val.count("»") > val.count("«"):
+        val = val.replace("»", "", val.count("»") - val.count("«"))
+    if val and after.lstrip().startswith("»") and not context.rstrip().endswith("«"):
+        val = "«" + val  # в шаблоне «(далее - ___»)» открывающая кавычка за пользователем
+    return val
