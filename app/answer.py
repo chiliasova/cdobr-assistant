@@ -317,8 +317,19 @@ def _draft_suffix(module: dict) -> str:
     return text
 
 
+SMALLTALK_RE = re.compile(r"\s*(привет\w*|здравствуй\w*|добр\w+ (день|утро|вечер)|как (у тебя )?дела|как ты|"
+                          r"кто ты|что ты (умеешь|можешь)|спасибо|благодарю|пока|до свидания)[\s!?.,)]*$", re.I)
+SMALLTALK = ("Здравствуйте! Я помощник по Инструкции о документообороте: отвечаю на вопросы со ссылками на пункты, "
+             "подбираю модуль и помогаю подготовить проект приказа или распоряжения, считаю маршрут визирования по "
+             "Матрице и проверяю готовый проект. Спросите, например: «Что делать с документом с отметкой «Срочно»?»")
+
+
 def prepare(question: str, history: list[dict] | None = None) -> dict:
     history = history or []
+    if SMALLTALK_RE.match(question):
+        # «как дела» не про дела в архиве — не ищем и не зовём модель
+        return {"hits": [], "found": True, "module": None, "direct": SMALLTALK, "question": question,
+                "fallback": None, "suffix": "", "actions": [], "route": None, "messages": [], "smalltalk": True}
     hits = search.get_index().search(_query(question, history), k=config.TOP_K + 2)
     best = hits[0]["relevance"] if hits else 0
     found = bool(best >= config.MIN_RELEVANCE)
@@ -425,7 +436,7 @@ def _finalize(prep: dict, text: str | None) -> dict:
     if not prep["found"]:
         return {"answer": REFUSAL, "status": "no_answer", "sources": [], "module": None, "problems": []}
     if prep.get("direct"):
-        return {"answer": prep["direct"], "status": "verified", "sources": [], "module": prep["module"],
+        return {"answer": prep["direct"], "status": "info" if prep.get("smalltalk") else "verified", "sources": [], "module": prep["module"],
                 "problems": []}
     if text is None:
         return {"answer": extractive(hits), "status": "extractive", "sources": hits,

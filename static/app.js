@@ -71,7 +71,7 @@ function sourcesHtml(sources) {
   return `<div class="sources">${top}${rest ? `<details><summary class="muted small">ещё ${sources.length - 3}</summary><div class="sources">${rest}</div></details>` : ""}</div>`;
 }
 
-const STATUS = { verified: "сверено с источником", unverified: "требует проверки", extractive: "дословная цитата", no_answer: "ответа нет в базе" };
+const STATUS = { verified: "сверено с источником", unverified: "требует проверки", extractive: "дословная цитата", no_answer: "ответа нет в базе", info: "о помощнике" };
 
 function addMsg(cls, html) {
   const d = document.createElement("div");
