@@ -150,7 +150,7 @@ $("#messages").addEventListener("click", async (e) => {
   if (t.dataset.act === "draft") startWizard(t.dataset.mod);
   if (t.dataset.act === "template") location.href = `/api/modules/${encodeURIComponent(t.dataset.mod)}/template`;
   if (t.dataset.act === "remarks") location.href = "/api/remarks-template";
-  if (t.dataset.act === "check") { openTab("check"); $("#checkFile").click(); }
+  if (t.dataset.act === "check") chatFile.click();
   if (t.dataset.act === "openDraft") { openTab("draft"); $("#modSel").value = t.dataset.mod; await loadSlots(); }
 });
 
@@ -288,22 +288,39 @@ async function loadRoute() {
 }
 
 // ---- Проверка ----
-$("#checkFile").onchange = async (e) => {
-  const fd = new FormData(); fd.append("file", e.target.files[0]);
+async function runCheck(file, out) {
+  const fd = new FormData(); fd.append("file", file);
+  out.innerHTML = `Проверяю «${esc(file.name)}»…`;
   const r = await fetch("/api/check", { method: "POST", body: fd });
   const data = await r.json();
-  if (!r.ok) { $("#checkOut").innerHTML = `<div class="issue">${esc(data.detail || r.statusText)}</div>`; return; }
-  let html = data.module
-    ? `<p>Проект сопоставлен с модулем «${esc(data.module.title)}» (совпадение постоянных формулировок ${data.match}%).</p>` : "";
+  if (!r.ok) { out.innerHTML = `<div class="issue">${esc(data.detail || r.statusText)}</div>`; return; }
+  let html = `<p>Проверил «${esc(file.name)}».` + (data.module
+    ? ` Проект сопоставлен с модулем «${esc(data.module.title)}» (совпадение постоянных формулировок ${data.match}%).</p>` : "</p>");
   html += data.issues?.length
     ? data.issues.map((i) => `<div class="issue">${esc(i.message)} <span class="small">[${esc(i.ref)}]</span></div>`).join("")
     : `<div class="good">Замечаний нет: поля заполнены, служебные элементы удалены, формулировки модуля сохранены.</div>`;
   if (data.next_steps?.length) html += `<h2>Что дальше</h2><ol class="route">${data.next_steps.map((s) =>
     `<li>${esc(s.text)} <span class="muted small">[${esc(s.ref)}]</span></li>`).join("")}</ol>`;
-  if (data.matrix) html += `<p><button id="checkRoute">Маршрут визирования по Матрице</button></p>`;
-  $("#checkOut").innerHTML = html;
-  if (data.matrix) $("#checkRoute").onclick = () => { openTab("route"); $("#rowSel").value = `${data.matrix.group}|${data.matrix.row}`; loadRoute(); };
-  e.target.value = "";
+  if (data.matrix) html += `<div class="actions"><button data-act="route" data-route="${esc(data.matrix.group)}|${data.matrix.row}">Маршрут визирования по Матрице</button></div>`;
+  out.innerHTML = html;
+}
+
+$("#checkFile").onchange = async (e) => { await runCheck(e.target.files[0], $("#checkOut")); e.target.value = ""; };
+$("#checkOut").addEventListener("click", (e) => {
+  const b = e.target.closest("[data-act=route]"); if (!b) return;
+  openTab("route"); $("#rowSel").value = b.dataset.route; $("#routeQuestions").innerHTML = ""; loadRoute();
+});
+
+// Загрузка из чата: результат показываем прямо в переписке
+const chatFile = Object.assign(document.createElement("input"), { type: "file", accept: ".docx", hidden: true });
+document.body.appendChild(chatFile);
+chatFile.onchange = async () => {
+  const f = chatFile.files[0]; if (!f) return;
+  addMsg("user", "📎 " + esc(f.name));
+  const out = addMsg("bot", "");
+  await runCheck(f, out);
+  out.scrollIntoView({ behavior: "smooth", block: "end" });
+  chatFile.value = "";
 };
 
 // ---- Журнал ----
