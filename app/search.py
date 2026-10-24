@@ -85,7 +85,10 @@ class Index:
     def _load_vectors(self):
         if not config.USE_EMBEDDINGS:
             return None
-        path = config.INDEX_DIR / f"vectors-{self.version}.npy"
+        # ключ кеша — и файлы, и разбиение на фрагменты (меняется при правке ingest.py)
+        import hashlib
+        key = hashlib.sha256("".join(c.id + c.text for c in self.chunks).encode()).hexdigest()[:12]
+        path = config.INDEX_DIR / f"vectors-{self.version}-{key}.npy"
         if path.exists():
             return np.load(path)
         try:
