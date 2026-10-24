@@ -151,3 +151,10 @@ def test_cut_tail_removed():
     t = answer._drop_cut_tail("1. Шаг один [п. 9.5.6].\n2. Шаг два [п. 4.2].\n3. Убедитесь, что приказ включает и Департ")
     assert t.endswith("[п. 4.2].")
     assert answer._drop_cut_tail("Срок три дня [п. 6.7]. Затем обра") == "Срок три дня [п. 6.7]."
+
+
+def test_step_numbers_not_checked():
+    from app import answer
+    hits = [{"ref": "п. 6.7", "title": "Сроки", "text": "Срочный документ исполняется в течение трех рабочих дней."}]
+    t = "1. Срочный документ исполняется в течение трех рабочих дней [п. 6.7].\n2. Срочный документ исполняется в течение трех рабочих дней [п. 6.7]."
+    assert not any("число" in p for p in answer.verify(t, hits))

@@ -90,7 +90,7 @@ def verify(answer: str, hits: list[dict]) -> list[str]:
             if _norm_ref(part) not in known:
                 problems.append(f"ссылка [{part}] не из найденных фрагментов")
     problems += _support_problems(answer, hits)
-    body = REF_RE.sub(" ", answer)
+    body = re.sub(r"^\s*\d+[.)]\s", " ", REF_RE.sub(" ", answer), flags=re.M)  # номера шагов списка — не факты
     src = " ".join(h["text"] + " " + h["ref"] for h in hits)
     src_nums = set(NUM_RE.findall(src))
     for n in NUM_RE.findall(body):
