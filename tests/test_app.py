@@ -181,3 +181,11 @@ def test_rule_for_other_doc_type_dropped():
     out = answer._drop_foreign(t, hits, q)
     assert "п. 9.9.2" not in out and "п. 3.2" in out and "не регламентирован" in out
     assert answer._module_hint("Как правильно составить сопроводительное письмо?", []) is None
+
+
+def test_approval_suffix_terms():
+    from app import answer
+    s = answer._approval_suffix("Как согласовать положение?")
+    assert "10 рабочих дней" in s and "[п. 10.3]" in s
+    s = answer._approval_suffix("Как организовать согласование большого документа?")
+    assert "Уточните вид документа" in s and "15 рабочих дней" in s

@@ -107,7 +107,9 @@ def verify(answer: str, hits: list[dict]) -> list[str]:
 
 def _support_problems(answer: str, hits: list[dict]) -> list[str]:
     """Предложение со ссылкой должно по словам совпадать с пунктом, на который ссылается."""
-    by_ref = {_norm_ref(h["ref"]): set(search.tokenize(h["title"] + " " + h["text"])) for h in hits}
+    by_ref: dict[str, set] = {}
+    for h in hits:  # длинный пункт разбит на части с одной ссылкой — объединяем
+        by_ref.setdefault(_norm_ref(h["ref"]), set()).update(search.tokenize(h["title"] + " " + h["text"]))
     problems = []
     for sent in SENT_RE.split(answer):
         refs = [_norm_ref(p) for r in REF_RE.findall(sent) for p in re.split(r";\s*", r)]
@@ -136,7 +138,9 @@ def _drop_foreign(text: str, hits: list[dict], question: str) -> str:
     if not question:
         return text
     q = _bigrams(question)
-    by_ref = {_norm_ref(h["ref"]): _bigrams(h["title"] + " " + h["text"]) for h in hits}
+    by_ref: dict[str, set] = {}
+    for h in hits:
+        by_ref.setdefault(_norm_ref(h["ref"]), set()).update(_bigrams(h["title"] + " " + h["text"]))
     kept, dropped = [], False
     for line in text.split("\n"):
         out = []
@@ -193,6 +197,41 @@ NEXT_STEPS_LIST = ("Что дальше:\n"
                    "4. Регистрация, затем рассылка и контроль [Методические рекомендации, п. 5.2].")
 
 
+APPROVAL_RE = re.compile(r"согласов|визир", re.I)
+DOC_KINDS = {"приказ": "приказ по основной деятельности", "распоряж": "распоряжение", "соглашени": "соглашение",
+             "методическ": "методические рекомендации", "положени": "положение", "регламент": "регламент",
+             "порядк": "порядок", "порядок": "порядок", "правил": "правила", "протокол": "протокол",
+             "информационн": "информационное письмо", "разъяснени": "официальное разъяснение",
+             "модул": "проект модуля", "концепц": "аналитический документ или концепция", "письм": "письмо"}
+
+
+def _terms() -> dict[str, str]:
+    """Сроки рассмотрения из п. 10.3: «положение» → «10 рабочих дней»."""
+    c = next((c for c in search.get_index().chunks if c.ref == "п. 10.3"), None)
+    return dict(re.findall(r"•\s*([^—•]+?)\s+—\s+(\d+ рабоч\w+ дн\w+)", c.text)) if c else {}
+
+
+def _approval_suffix(question: str) -> str:
+    terms = _terms()
+    if not terms:
+        return ""
+    q = question.lower()
+    kind = next((v for k, v in DOC_KINDS.items() if k in q and v in terms), None)
+    if kind:
+        text = (f"Срок: каждое подразделение рассматривает {kind.split(' или ')[0]} не более {terms[kind]} "
+                "со дня поступления в ИИС ДО — и при первичном, и при повторном рассмотрении [п. 10.3].")
+    else:
+        common = [f"{k} — {v}" for k, v in terms.items()
+                  if k in ("положение", "регламент", "приказ по основной деятельности", "методические рекомендации",
+                           "соглашение", "распоряжение")]
+        text = ("Сроки зависят от вида документа. Каждое подразделение рассматривает проект не дольше: "
+                + "; ".join(common) + " [п. 10.3]. Уточните вид документа (положение, регламент, порядок, приказ) — "
+                "назову точный срок.")
+    text += (" Подписание — как правило, не более трёх рабочих дней после направления подписанту [п. 10.15]. "
+             "Какие подразделения визируют обязательно, покажет вкладка «Маршрут визирования» по Матрице [п. 10.11].")
+    return text
+
+
 def _draft_suffix(module: dict) -> str:
     """Добавка к ответу о подготовке документа: модуль и визы по Матрице (без LLM)."""
     text = (f"Для такого документа есть модуль «{module['title']}». Проект, строго соответствующий модулю, "
@@ -228,6 +267,8 @@ def prepare(question: str, history: list[dict] | None = None) -> dict:
         suffix = _draft_suffix(module)
         actions += [{"type": "draft", "label": "Подготовить проект со мной", "module_id": module["module_id"]},
                     {"type": "template", "label": "Скачать пустой шаблон", "module_id": module["module_id"]}]
+    elif APPROVAL_RE.search(question) and found:
+        suffix = _approval_suffix(question)
     if REMARKS_RE.search(question) and found:
         suffix += (" Таблицу для сбора замечаний я подготовил по форме Приложения № 1 к Инструкции "
                    "(номер, автор и подразделение, фрагмент ПД, содержание, предложенная редакция, позиция исполнителя, "
@@ -239,6 +280,10 @@ def prepare(question: str, history: list[dict] | None = None) -> dict:
     if module and found:
         extra = ix.search(question + " порядок подготовки проекта на основе модуля карточка визирование",
                           k=3, sources={"methodology"})
+    if APPROVAL_RE.search(question) and not module and not direct:
+        # общий порядок согласования: кто готовит, последовательность виз, Матрица, сроки
+        want = ("п. 10.2", "п. 10.6", "п. 10.11", "п. 10.14")
+        extra = [{**c.to_dict(), "relevance": 1.0} for r in want for c in ix.chunks if c.ref == r]
     if REMARKS_RE.search(question):
         extra = ix.search("таблица замечаний по приложению 1 систематизирует замечания повторное рассмотрение",
                           k=3, sources={"instruction"})
