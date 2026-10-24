@@ -339,7 +339,12 @@ def prepare(question: str, history: list[dict] | None = None) -> dict:
         found = True
         terms = _approval_suffix(question if DOC_RE.search(question) else _query(question, history))
         # спросили о конкретном виде документа — срок первым, общий порядок после
-        direct = terms + "\n\n" + APPROVAL_STEPS if DOC_RE.search(question) else APPROVAL_STEPS + "\n\n" + terms
+        if DOC_RE.search(question) and _query(question, history) != question:
+            direct = terms  # уточнение «а для положения?» — общий порядок уже был в прошлом ответе
+        elif DOC_RE.search(question):
+            direct = terms + "\n\n" + APPROVAL_STEPS
+        else:
+            direct = APPROVAL_STEPS + "\n\n" + terms
     if REMARKS_RE.search(question) and not direct:
         # реестр замечаний — по пунктам главы 10 и Приложению № 1 без пересказа моделью
         found = True
@@ -408,7 +413,7 @@ def finalize(prep: dict, text: str | None) -> dict:
                 c = next((c for c in search.get_index().chunks if c.ref == part.strip()), None)
                 if c and c.ref not in have:
                     have.add(c.ref)
-                    res["sources"] = res["sources"] + [{**c.to_dict(), "relevance": 1.0}]
+                    res["sources"] = res["sources"] + [{**c.to_dict(), "relevance": None}]
     return res
 
 

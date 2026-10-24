@@ -65,7 +65,7 @@ function renderAnswer(text, sources) {
 function sourcesHtml(sources) {
   if (!sources.length) return "";
   const card = (s, i) =>
-    `<div class="src" data-i="${i}"><span class="rel">${Math.round(s.relevance * 100)}%</span><b>${esc(s.ref)}</b> · ${esc(s.title)}<br>${esc(s.text.slice(0, 160))}…</div>`;
+    `<div class="src" data-i="${i}">${s.relevance == null ? "" : `<span class="rel">${Math.round(s.relevance * 100)}%</span>`}<b>${esc(s.ref)}</b> · ${esc(s.title)}<br>${esc(s.text.slice(0, 160))}…</div>`;
   const top = sources.slice(0, 3).map(card).join("");
   const rest = sources.slice(3).map((s, i) => card(s, i + 3)).join("");
   return `<div class="sources">${top}${rest ? `<details><summary class="muted small">ещё ${sources.length - 3}</summary><div class="sources">${rest}</div></details>` : ""}</div>`;
