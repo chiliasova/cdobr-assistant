@@ -205,6 +205,9 @@ DOC_KINDS = {"приказ": "приказ по основной деятель�
              "модул": "проект модуля", "концепц": "аналитический документ или концепция", "письм": "письмо"}
 
 
+DOC_RE = re.compile("|".join(DOC_KINDS), re.I)
+
+
 def _terms() -> dict[str, str]:
     """Сроки рассмотрения из п. 10.3: «положение» → «10 рабочих дней»."""
     c = next((c for c in search.get_index().chunks if c.ref == "п. 10.3"), None)
@@ -267,8 +270,9 @@ def prepare(question: str, history: list[dict] | None = None) -> dict:
         suffix = _draft_suffix(module)
         actions += [{"type": "draft", "label": "Подготовить проект со мной", "module_id": module["module_id"]},
                     {"type": "template", "label": "Скачать пустой шаблон", "module_id": module["module_id"]}]
-    elif APPROVAL_RE.search(question) and found:
-        suffix = _approval_suffix(question)
+    elif APPROVAL_RE.search(_query(question, history)) and found:
+        # «а для положения?» после вопроса о согласовании — тот же сценарий
+        suffix = _approval_suffix(question if DOC_RE.search(question) else _query(question, history))
     if REMARKS_RE.search(question) and found:
         suffix += (" Таблицу для сбора замечаний я подготовил по форме Приложения № 1 к Инструкции "
                    "(номер, автор и подразделение, фрагмент ПД, содержание, предложенная редакция, позиция исполнителя, "
@@ -280,7 +284,7 @@ def prepare(question: str, history: list[dict] | None = None) -> dict:
     if module and found:
         extra = ix.search(question + " порядок подготовки проекта на основе модуля карточка визирование",
                           k=3, sources={"methodology"})
-    if APPROVAL_RE.search(question) and not module and not direct:
+    if APPROVAL_RE.search(_query(question, history)) and not module and not direct:
         # общий порядок согласования: кто готовит, последовательность виз, Матрица, сроки
         want = ("п. 10.2", "п. 10.6", "п. 10.11", "п. 10.14")
         extra = [{**c.to_dict(), "relevance": 1.0} for r in want for c in ix.chunks if c.ref == r]
