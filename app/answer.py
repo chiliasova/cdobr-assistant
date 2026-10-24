@@ -224,11 +224,18 @@ def extract_slots(description: str, slots: list[dict]) -> dict[str, str]:
             continue
         slot = by_id[sid]
         val = _strip_echo(val, slot["context"], slot.get("after", ""), slot["kind"])
-        # текстовое поле, в которое попала одна дата или копия другого поля, — пусть заполнит человек
-        if slot["kind"] != "date" and (re.fullmatch(r"[\d.]+", val) or val in out.values()):
+        # текстовое поле, в которое попала одна дата, — пусть заполнит человек
+        if slot["kind"] != "date" and re.fullmatch(r"[\d.]+", val):
             continue
         if val.lower().strip(".") not in EMPTY:
             out[sid] = val
+    # Одинаковые значения в полях с разными подписями — модель «съехала» на соседнее поле.
+    # Заголовок и п. 1 по методичке совпадают, их не трогаем; поле «Срок и действие» —
+    # самое путаное, из него и убираем дубль.
+    for sid, val in list(out.items()):
+        twins = [o for o, v in out.items() if v == val and o != sid]
+        if twins and "Срок" in by_id[sid]["label"] and all("Срок" not in by_id[t]["label"] for t in twins):
+            del out[sid]
     return out
 
 
