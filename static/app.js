@@ -71,7 +71,7 @@ function sourcesHtml(sources) {
   return `<div class="sources">${top}${rest ? `<details><summary class="muted small">ещё ${sources.length - 3}</summary><div class="sources">${rest}</div></details>` : ""}</div>`;
 }
 
-const STATUS = { verified: "сверено с источником", unverified: "требует проверки", extractive: "дословная цитата", no_answer: "ответа нет в базе", info: "о помощнике" };
+const STATUS = { verified: "сверено с источником", unverified: "требует проверки", extractive: "дословная цитата", no_answer: "ответа нет в базе", info: "о помощнике", clarify: "нужно уточнение" };
 
 function addMsg(cls, html) {
   const d = document.createElement("div");
@@ -122,12 +122,13 @@ function finishAnswer(bot, q, res) {
   bot.classList.remove("typing");
   lastSources = res.sources;
   bot._sources = res.sources;
-  let html = renderAnswer(res.answer, res.sources);
+  let html = res.understood ? `<div class="understood">Понял вопрос как: «${esc(res.understood)}»</div>` : "";
+  html += renderAnswer(res.answer, res.sources);
   html += `<div><span class="badge ${res.status}">${STATUS[res.status] || res.status}</span></div>`;
   html += sourcesHtml(res.sources);
   const acts = [];
   for (const a of res.actions || []) {
-    acts.push(`<button data-act="${a.type}" data-mod="${esc(a.module_id || "")}">${esc(a.label)}</button>`);
+    acts.push(`<button data-act="${a.type}" data-mod="${esc(a.module_id || "")}" data-q="${esc(a.question || "")}">${esc(a.label)}</button>`);
   }
   if (res.route) acts.push(`<button data-act="route" data-route="${esc(res.route.group)}|${res.route.row}">Показать маршрут визирования</button>`);
   acts.push(`<button data-act="rate" data-v="1">👍 полезно</button><button data-act="rate" data-v="-1">👎 не то</button>`);
@@ -152,6 +153,7 @@ $("#messages").addEventListener("click", async (e) => {
   if (t.dataset.act === "template") location.href = `/api/modules/${encodeURIComponent(t.dataset.mod)}/template`;
   if (t.dataset.act === "remarks") location.href = "/api/remarks-template";
   if (t.dataset.act === "check") chatFile.click();
+  if (t.dataset.act === "ask" && !busy) ask(t.dataset.q);
   if (t.dataset.act === "openDraft") { openTab("draft"); $("#modSel").value = t.dataset.mod; await loadSlots(); }
 });
 

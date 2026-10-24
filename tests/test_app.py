@@ -223,3 +223,48 @@ def test_bad_draft_all_errors_found(tmp_path):
     issues = " ".join(i["message"] for i in modules.analyze_draft(make(tmp_path / "bad.docx"))["issues"])
     for part in ("Не заполнено", "Не выбран вариант", "[7]", "МОДУЛЬНЫЙ ДОКУМЕНТ", "служебная зона", "обеспечить применение"):
         assert part in issues, part
+
+
+ORGANIZER_QUESTIONS = [
+    "Мне нужно подготовить приказ о вводе информационной системы в эксплуатацию. Что для этого нужно сделать?",
+    "Можно ли направить внутреннюю служебную записку без сопроводительного письма? Если нет — как его составить?",
+    "Я подготовил приказ на основе модульного документа. Проверь его и подскажи, что делать дальше",
+    "Как организовать согласование большого нормативного документа с несколькими подразделениями и какие сроки устанавливать?",
+    "Как оформить реестр замечаний от нескольких подразделений к проекту документа?",
+    "Что делать с документом с отметкой «Срочно»?",
+]
+
+
+def test_normalize_typos_slang_layout():
+    from app.normalize import normalize
+    assert normalize("чо делать с доком с пометкой срочьно")[0] == "что делать с документом с пометкой срочно"
+    assert "служебная записка" in normalize("можно ли отправить сз без сопроводиловки")[0]
+    assert normalize("ghbrfp о вводе ИС")[0] == "приказ о вводе ИС"
+    assert normalize("соглосование приказа сколько дней")[0] == "согласование приказа сколько дней"
+    assert normalize("распоряжение о рабочей групе")[0] == "распоряжение о рабочей группе"
+    # настоящие слова не подгоняем под Инструкцию, вопросы организаторов не трогаем
+    assert normalize("Какая погода в Ростове?")[1] == []
+    for q in ORGANIZER_QUESTIONS:
+        assert normalize(q)[1] == [], q
+
+
+def test_typo_question_finds_point(client):
+    r = client.post("/api/ask", json={"question": "чо делать с доком с пометкой срочьно"}).json()
+    assert r["understood"] == "что делать с документом с пометкой срочно"
+    assert "п. 6.7" in [s["ref"] for s in r["sources"]]
+
+
+def test_vague_question_asks_to_clarify(client):
+    r = client.post("/api/ask", json={"question": "какой срок?"}).json()
+    assert r["status"] == "clarify" and len([a for a in r["actions"] if a["type"] == "ask"]) == 4
+    r = client.post("/api/ask", json={"question": "визы"}).json()
+    assert r["status"] == "clarify"
+    for q in ORGANIZER_QUESTIONS:
+        r = client.post("/api/ask", json={"question": q}).json()
+        assert r["status"] != "clarify", q
+
+
+def test_colloquial_draft_request_offers_module():
+    from app import answer
+    assert answer.prepare("мне надо приказ о вводе ис")["module"]["module_id"] == "Модуль_приказа_о_вводе_ИС"
+    assert answer.prepare("сделай распоряжение о рабочей групе")["module"]["module_id"] == "Модуль_распоряжения_о_рабочей_группе"

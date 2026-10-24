@@ -94,7 +94,7 @@ main { max-width: 1040px; margin: 0 auto; padding: 20px 16px; }
 .badge { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; font-weight: 700; padding: 3px 10px; border-radius: 99px; margin-top: 10px; }
 .badge.verified { background: #e2f6ec; color: var(--ok); } .badge.verified::before { content: "✓"; }
 .badge.unverified, .badge.extractive { background: #fff1db; color: var(--warn); } .badge.extractive::before { content: "❝"; } .badge.unverified::before { content: "!"; }
-.badge.no_answer, .badge.info { background: var(--bg); color: var(--muted); }
+.badge.no_answer, .badge.info, .badge.clarify { background: var(--bg); color: var(--muted); }
 .sources { margin-top: 10px; display: grid; gap: 8px; white-space: normal; }
 .src {
   font-size: 13px; border: 1px solid var(--line); border-left: 4px solid var(--accent); padding: 8px 12px; background: #fafbff;
@@ -155,3 +155,5 @@ input[type=file]::file-selector-button { font: inherit; font-weight: 600; border
 body.widget header nav, body.widget .who { display: none; }
 body.widget main { padding: 8px; }
 body.widget .msg.bot { margin-left: 0; } body.widget .msg.bot::before { display: none; }
+
+.understood { font-size: 12.5px; color: var(--muted, #6b7280); margin-bottom: 6px; }

@@ -11,7 +11,7 @@ import logging
 import re
 import time
 
-from . import config, llm, modules, routing, search
+from . import config, llm, modules, normalize, routing, search
 
 log = logging.getLogger(__name__)
 
@@ -20,6 +20,9 @@ SYSTEM = """Ты — помощник сотрудника по Инструкц
 Правила:
 - Фрагменты отсортированы по близости к вопросу: первый — самый подходящий.
 - Начни с главного: срок, действие или ответственный. Без вступлений.
+- Объясняй своими словами, как опытный коллега: не копируй пункт, а скажи, что это значит для сотрудника и что ему сделать. Термины, сроки и названия бери из фрагмента.
+- Вопрос может быть написан коротко, разговорно или с опечатками — пойми его смысл.
+- Если ответ зависит от того, чего нет в вопросе (вид документа, от кого поступил, есть ли отметка «Срочно»), назови варианты из фрагментов и в конце попроси уточнить.
 - Пиши просто и коротко: 2–4 предложения. Если спрашивают «как сделать» или «что нужно сделать» — дай нумерованные шаги (не больше 6), по одной ссылке на шаг.
 - Если вопрос из нескольких частей и на какую-то часть во фрагментах ответа нет, так и напиши, назвав эту часть своими словами из вопроса: «<эта часть вопроса> в Инструкции не регламентирована» — и не давай своих советов по этой части.
 - Не переноси правило для одного вида документа на другой: если во фрагменте не назван тот вид документа, о котором спрашивают, — это не ответ на вопрос.
@@ -35,7 +38,8 @@ REFUSAL = ("В Инструкции и связанных документах �
            "Уточните вопрос или обратитесь в Департамент ДОУ (подразделение ДОУ вашего РО).")
 
 DRAFT_RE = re.compile(r"подготов|состав(ь|ить)|сформир|созда(й|ть) (проект|черновик|приказ|распоряж)|"
-                      r"черновик|шаблон|модул|оформи(ть)? (приказ|распоряж)", re.I)
+                      r"черновик|шаблон|модул|оформи(ть)? (приказ|распоряж)|сдела(й|йте|ть|ем)|напиш|"
+                      r"(нуж(ен|но|на)|надо|хочу|требуется)\b.{0,25}(приказ|распоряж)", re.I)
 REF_RE = re.compile(r"\[([^\[\]]{2,120})\]")
 # конец предложения, но не «п. 3.2» и не «г. Москва»
 SENT_RE = re.compile(r"(?<=[.!?])(?<![\s\[(]п\.)(?<![\s\[(]г\.)\s+")
@@ -331,8 +335,67 @@ SMALLTALK = ("Здравствуйте! Я помощник по Инструк�
              "Матрице и проверяю готовый проект. Спросите, например: «Что делать с документом с отметкой «Срочно»?»")
 
 
+# Слова, которые не сужают вопрос: «какой срок?» без предмета можно понять по-разному
+GENERIC = set("""срок документ делать сделать день рабочий нужно надо какой каков сколько как кто куда когда где
+оформить оформление порядок правило вопрос подсказать сказать подскажи скажи узнать хотеть работа можно ли
+требование быть""".split())
+TOPICS = {
+    "Глава 2": "организация ДОУ в подразделениях", "Глава 3": "виды документов и общие правила документооборота",
+    "Глава 4": "полномочия и функции в ИИС ДО", "Глава 5": "входящие документы: приём и регистрация",
+    "Глава 6": "контроль исполнения поручений", "Глава 7": "исходящие документы: регистрация и отправка",
+    "Глава 8": "оформление реквизитов документа", "Глава 9": "подготовка документов разных видов",
+    "Глава 10": "согласование и утверждение проектов документов", "Глава 11": "дела, архивное хранение и уничтожение",
+    "Методические": "модульные документы (шаблоны приказов и распоряжений)", "Матрица": "обязательные визы по Матрице",
+}
+
+
+def _topic(hit: dict) -> str | None:
+    t = hit["title"] if hit["source"] == "instruction" else hit["ref"]
+    return next((v for k, v in TOPICS.items() if t.startswith(k + ".") or t.startswith(k + " ") or t.startswith(k + ",")), None)
+
+
+# «Какой срок?» — сроков в Инструкции много, предлагаем самые частые
+TERM_OPTIONS = ["Какой срок регистрации входящего документа?", "Какой срок исполнения поручения?",
+                "Какой срок согласования проекта документа?", "Какой срок хранения дел?"]
+
+
+def _clarify(question: str, hits: list[dict]) -> dict | None:
+    """Короткий вопрос без предмета, а найденные пункты из разных глав — спрашиваем, о чём речь, вместо догадки."""
+    tokens = search.tokenize(question)
+    specific = [t for t in tokens if t not in GENERIC]
+    if len(specific) > 1:
+        return None
+    if not specific and "срок" in tokens:
+        return {"text": "Сроков в Инструкции много, и они зависят от того, что происходит с документом. Уточните, какой срок "
+                        "нужен:\n" + "\n".join(f"{i}. {q}" for i, q in enumerate(TERM_OPTIONS, 1)),
+                "actions": [{"type": "ask", "label": q.rstrip("?"), "question": q} for q in TERM_OPTIONS]}
+    topics = []
+    for h in hits:
+        t = _topic(h)
+        if t and t not in topics and h["relevance"] >= config.MIN_RELEVANCE * 0.8:
+            topics.append(t)
+    if len(topics) < (2 if not specific else 3):
+        return None
+    topics = topics[:4]
+    base = question.strip().rstrip("?.!")
+    text = ("Вопрос можно понять по-разному, а ответ зависит от ситуации. Уточните, о чём речь:\n"
+            + "\n".join(f"{i}. {t[:1].upper() + t[1:]}" for i, t in enumerate(topics, 1))
+            + "\n\nИли напишите вопрос подробнее: какой документ, от кого он и что с ним нужно сделать.")
+    return {"text": text, "actions": [{"type": "ask", "label": t[:1].upper() + t[1:], "question": f"{base} — {t}"}
+                                       for t in topics]}
+
+
 def prepare(question: str, history: list[dict] | None = None) -> dict:
-    history = history or []
+    # опечатки, «сз», «доки», латинская раскладка — к словам Инструкции до поиска и правил
+    question, fixes = normalize.normalize(question)
+    history = [{**h, "content": normalize.normalize(h["content"])[0]} if h.get("role") == "user" else h
+               for h in history or []]
+    prep = _prepare(question, history)
+    prep["fixes"] = fixes
+    return prep
+
+
+def _prepare(question: str, history: list[dict]) -> dict:
     if SMALLTALK_RE.match(question):
         # «как дела» не про дела в архиве — не ищем и не зовём модель
         return {"hits": [], "found": True, "module": None, "direct": SMALLTALK, "question": question,
@@ -366,6 +429,11 @@ def prepare(question: str, history: list[dict] | None = None) -> dict:
             direct = terms + "\n\n" + APPROVAL_STEPS
         else:
             direct = APPROVAL_STEPS + "\n\n" + terms
+    clar = None
+    if found and not direct and not module and _query(question, history) == question:
+        clar = _clarify(question, hits)
+    if clar:
+        direct, actions = clar["text"], clar["actions"]
     if REMARKS_RE.search(question) and not direct:
         # реестр замечаний — по пунктам главы 10 и Приложению № 1 без пересказа моделью
         found = True
@@ -421,6 +489,8 @@ def extractive(hits: list[dict], n: int = 2) -> str:
 
 def finalize(prep: dict, text: str | None) -> dict:
     res = _finalize(prep, text)
+    if prep.get("fixes") and res["status"] != "no_answer":
+        res["understood"] = prep["question"]
     ok = res["status"] != "no_answer"
     res["route"] = prep["route"] if ok and not prep.get("direct") else None  # вид документа ещё неизвестен
     res["actions"] = prep["actions"] if ok else []
@@ -443,7 +513,8 @@ def _finalize(prep: dict, text: str | None) -> dict:
     if not prep["found"]:
         return {"answer": REFUSAL, "status": "no_answer", "sources": [], "module": None, "problems": []}
     if prep.get("direct"):
-        return {"answer": prep["direct"], "status": "info" if prep.get("smalltalk") else "verified", "sources": [], "module": prep["module"],
+        status = "info" if prep.get("smalltalk") else "clarify" if any(a["type"] == "ask" for a in prep["actions"]) else "verified"
+        return {"answer": prep["direct"], "status": status, "sources": [], "module": prep["module"],
                 "problems": []}
     if text is None:
         return {"answer": extractive(hits), "status": "extractive", "sources": hits,
