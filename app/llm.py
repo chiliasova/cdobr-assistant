@@ -2,11 +2,14 @@
 from __future__ import annotations
 
 import json
+import logging
+import re
 
 import httpx
 
 from . import config
 
+log = logging.getLogger(__name__)
 TIMEOUT = httpx.Timeout(300.0, connect=3.0)
 
 
@@ -17,9 +20,9 @@ def embed(texts: list[str]) -> list[list[float]]:
     return r.json()["embeddings"]
 
 
-def _payload(messages, fmt=None, max_tokens=400):
+def _payload(messages, fmt=None, max_tokens=400, ctx=4096):
     p = {"model": config.LLM_MODEL, "messages": messages, "stream": False, "think": False,
-         "options": {"temperature": 0.1, "num_predict": max_tokens, "num_ctx": 4096}}
+         "options": {"temperature": 0.1, "num_predict": max_tokens, "num_ctx": ctx}}
     if fmt:
         p["format"] = fmt
     return p
@@ -44,11 +47,22 @@ def chat_stream(messages: list[dict], max_tokens: int = 400):
                     break
 
 
-def chat_json(messages: list[dict], schema: dict, max_tokens: int = 600) -> dict:
+PAIR_RE = re.compile(r'"([^"\\]+)"\s*:\s*"((?:[^"\\]|\\.)*)"')
+
+
+def chat_json(messages: list[dict], schema: dict, max_tokens: int = 1500) -> dict:
     r = httpx.post(f"{config.OLLAMA_URL}/api/chat",
-                   json=_payload(messages, fmt=schema, max_tokens=max_tokens), timeout=TIMEOUT)
+                   json=_payload(messages, fmt=schema, max_tokens=max_tokens, ctx=8192), timeout=TIMEOUT)
     r.raise_for_status()
-    return json.loads(r.json()["message"]["content"])
+    data = r.json()
+    content = data["message"]["content"]
+    try:
+        return json.loads(content)
+    except json.JSONDecodeError:
+        # Ответ оборвался (лимит токенов или контекста) — берём все дописанные пары «поле: значение»
+        log.warning("JSON от модели оборван (done_reason=%s, eval_count=%s, prompt_eval_count=%s): %r",
+                    data.get("done_reason"), data.get("eval_count"), data.get("prompt_eval_count"), content[-200:])
+        return {k: json.loads(f'"{v}"') for k, v in PAIR_RE.findall(content)}
 
 
 def available() -> bool:

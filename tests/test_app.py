@@ -97,3 +97,11 @@ def test_route_working_group():
 def test_bad_date_warns():
     _, warnings = modules.fill("Модуль_распоряжения_о_рабочей_группе", {"s7": "030101"})
     assert any("не распознана" in w for w in warnings)
+
+
+def test_truncated_json_is_salvaged(monkeypatch):
+    from app import llm
+    cut = '{\n  "s1": "внедрению CRM-системы",\n  "s2": "подготовки к \\"внедрению\\"",\n  "s3": "внедр'
+    monkeypatch.setattr(httpx, "post", lambda url, **kw: httpx.Response(
+        200, json={"message": {"content": cut}, "done_reason": "length"}, request=httpx.Request("POST", url)))
+    assert llm.chat_json([], {}) == {"s1": "внедрению CRM-системы", "s2": 'подготовки к "внедрению"'}

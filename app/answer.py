@@ -199,5 +199,5 @@ def extract_slots(description: str, slots: list[dict]) -> dict[str, str]:
          "Отвечай только JSON."},
         {"role": "user", "content": f"Поля:\n{fields}\n\nОписание:\n{description}"},
     ]
-    data = llm.chat_json(msgs, schema, max_tokens=800)
+    data = llm.chat_json(msgs, schema)
     return {k: str(v).strip() for k, v in data.items() if k in schema["properties"] and str(v).strip()}
