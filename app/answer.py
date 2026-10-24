@@ -129,6 +129,10 @@ def _bigrams(text: str) -> set[tuple[str, str]]:
     return set(zip(t, t[1:]))
 
 
+DOC_NOUN_RE = re.compile(r"письмо|записка|приказ|распоряжение|положение|регламент|порядок|правило|протокол|"
+                         r"соглашение|договор|акт|справка|разъяснение|рекомендация|постановление|телеграмма|доверенность")
+
+
 def _drop_foreign(text: str, hits: list[dict], question: str) -> str:
     """Убираем предложения, где требование к одному виду документа перенесено на другой.
 
@@ -147,7 +151,8 @@ def _drop_foreign(text: str, hits: list[dict], question: str) -> str:
         for sent in SENT_RE.split(line):
             refs = [_norm_ref(p) for r in REF_RE.findall(sent) for p in re.split(r";\s*", r)]
             src = set().union(*(by_ref[r] for r in refs if r in by_ref)) if refs else set()
-            terms = _bigrams(REF_RE.sub(" ", sent)) & q
+            # смотрим только на названия видов документов («сопроводительное письмо», «служебная записка»)
+            terms = {b for b in _bigrams(REF_RE.sub(" ", sent)) & q if DOC_NOUN_RE.match(b[1])}
             if refs and terms and not (terms & src):
                 dropped = True
                 continue
