@@ -144,3 +144,10 @@ def test_clean_echo_and_short_refs():
     t = answer.clean("1. Визы ставят по порядку [п. 4.2].\n2. Пункты [п. 9.5.6].\n\nВопрос: что делать?", hits)
     assert "Вопрос" not in t
     assert "[Методические рекомендации, п. 4.2]" in t and "[п. 9.5.6]" in t
+
+
+def test_cut_tail_removed():
+    from app import answer
+    t = answer._drop_cut_tail("1. Шаг один [п. 9.5.6].\n2. Шаг два [п. 4.2].\n3. Убедитесь, что приказ включает и Департ")
+    assert t.endswith("[п. 4.2].")
+    assert answer._drop_cut_tail("Срок три дня [п. 6.7]. Затем обра") == "Срок три дня [п. 6.7]."

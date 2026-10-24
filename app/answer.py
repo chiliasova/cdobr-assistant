@@ -59,7 +59,19 @@ def clean(text: str, hits: list[dict]) -> str:
     def fix(m):
         parts = [p.strip() for p in re.split(r";\s*", m.group(1))]
         return "[" + "; ".join(alias.get(_norm_ref(p), p) if _norm_ref(p) not in known else p for p in parts) + "]"
-    return REF_RE.sub(fix, text).strip()
+    text = REF_RE.sub(fix, text).strip()
+    return _drop_cut_tail(text)
+
+
+def _drop_cut_tail(text: str) -> str:
+    """Ответ оборвался на лимите токенов — убираем недописанный последний шаг или предложение."""
+    if not text or re.search(r"[.!?»)\]]\s*$", text):
+        return text
+    lines = text.rstrip().split("\n")
+    if len(lines) > 1 and re.match(r"\s*\d+[.)]\s", lines[-1]):
+        return "\n".join(lines[:-1]).rstrip()
+    cut = max(text.rfind(". "), text.rfind("]."), text.rfind("]"))
+    return text[:cut + 2].rstrip() if cut > 0 else text
 
 
 def _norm_ref(r: str) -> str:
@@ -194,12 +206,21 @@ def prepare(question: str, history: list[dict] | None = None) -> dict:
         if h["id"] not in seen and h["source"] != "module":  # шаблоны сбивают модель, про модуль скажет suffix
             seen.add(h["id"])
             merged.append(h)
+    route = _route_hint(merged[:config.TOP_K]) or (_route_from_module(module) if module else None)
+    if module and found:
+        # визы по Матрице уже перечислены в suffix — строку таблицы модель только пересказывает с обрывом
+        merged = [h for h in merged if h["source"] != "matrix"]
     hits = merged[:config.TOP_K]
     return {"hits": hits, "found": found, "module": module, "direct": direct, "suffix": suffix.strip(),
-            "actions": actions, "route": _route_hint(hits),
+            "actions": actions, "route": route,
             "messages": [{"role": "system", "content": SYSTEM},
                          *[{"role": h["role"], "content": h["content"]} for h in history[-4:]],
                          {"role": "user", "content": f"Фрагменты:\n\n{_context(hits)}\n\nВопрос: {question}"}]}
+
+
+def _route_from_module(module: dict) -> dict | None:
+    row = modules.MATRIX_ROW.get(module["module_id"])
+    return {"group": row[0], "row": row[1]} if row else None
 
 
 def _clip(t: str, n: int = 450) -> str:
@@ -249,7 +270,7 @@ def ask(question: str, history: list[dict] | None = None) -> dict:
     text = None
     if prep["found"] and config.USE_LLM and not prep.get("direct"):
         try:
-            text = llm.chat(prep["messages"])
+            text = llm.chat(prep["messages"], max_tokens=500)
         except Exception:
             text = None
     return finalize(prep, text)

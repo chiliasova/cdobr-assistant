@@ -131,7 +131,7 @@ def ask_stream(body: Ask, u=Depends(current_user)):
         if prep["found"] and config.USE_LLM and not prep.get("direct"):
             try:
                 parts = []
-                for tok in llm.chat_stream(prep["messages"]):
+                for tok in llm.chat_stream(prep["messages"], max_tokens=500):
                     parts.append(tok)
                     yield _sse("token", {"t": tok})
                 text = "".join(parts).strip()
