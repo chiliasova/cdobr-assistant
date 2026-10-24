@@ -206,3 +206,20 @@ def test_offtopic_not_glued_to_previous():
     h = [{"role": "user", "content": "Что делать с документом с отметкой «Срочно»?"}, {"role": "assistant", "content": "…"}]
     assert answer._query("какая погода в Ростове?", h) == "какая погода в Ростове?"
     assert answer._query("а для положения?", h).startswith("Что делать")
+
+
+def test_foreign_not_regulated_dropped():
+    from app import answer
+    hits = [{"ref": "п. 9.5.6", "title": "Ввод ИС", "text": "Приказ о вводе ИС указывает объект и дату ввода."}]
+    q = "Мне нужно подготовить приказ о вводе информационной системы в эксплуатацию. Что для этого нужно сделать?"
+    t = "1. Указать объект и дату ввода [п. 9.5.6].\n\nВопрос о составлении сопроводительного письма не регламентирован в Методических рекомендациях."
+    out = answer._drop_foreign(t, hits, q)
+    assert "сопроводительного" not in out
+
+
+def test_bad_draft_all_errors_found(tmp_path):
+    from app import modules
+    from tools.make_bad_draft import make
+    issues = " ".join(i["message"] for i in modules.analyze_draft(make(tmp_path / "bad.docx"))["issues"])
+    for part in ("Не заполнено", "Не выбран вариант", "[7]", "МОДУЛЬНЫЙ ДОКУМЕНТ", "служебная зона", "обеспечить применение"):
+        assert part in issues, part

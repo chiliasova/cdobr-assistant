@@ -321,7 +321,7 @@ def fill(module_id: str, values: dict[str, str]) -> tuple[Path, list[str]]:
                 if val.endswith(".") and after.lstrip().startswith("."):
                     val = val[:-1]  # «Кузнецова В. В.» + «.» шаблона
                 r.text = r.text[: m.start()] + val + after
-            elif s and s.kind == "choice" and CHOICE_RE.search(r.text):
+            elif s and s.kind == "choice" and CHOICE_RE.search(r.text) and val != r.text:  # пустое поле — не выбираем за человека
                 pick = next((o for o in s.options or [] if o.lower() in val.lower()), None)
                 if pick:
                     r.text = CHOICE_RE.sub(pick, r.text, count=1)
@@ -368,9 +368,16 @@ def check_draft(path: Path) -> list[dict]:
         if not ok:
             issues.append({"message": msg, "ref": ref})
 
-    add(not re.search(r"_{3,}", text), "В документе остались прочерки (незаполненные поля).",
-        "Методические рекомендации, п. 3.3")
-    add(not re.search(r"\[\d+\]", text), "Остались номера примечаний вида [1].",
+    blanks = [re.sub(r"\s+", " ", text[max(0, m.start() - 45):m.start()].split("\n")[-1] + "___").strip()
+              for m in BLANK_RE.finditer(text) if "_" in m.group()]
+    if blanks:
+        where = "; ".join(f"«…{b[-50:]}»" for b in blanks[:3]) + (f" и ещё {len(blanks) - 3}" if len(blanks) > 3 else "")
+        issues.append({"message": f"Не заполнено полей: {len(blanks)} — {where}.", "ref": "Методические рекомендации, п. 3.3"})
+    for m in CHOICE_RE.finditer(text):
+        issues.append({"message": f"Не выбран вариант «{m.group(0)}» — оставьте одно слово, второе и знак «/» удалите.",
+                       "ref": "Методические рекомендации, п. 3.3"})
+    marks = re.findall(r"\[\d+\]", text)
+    add(not marks, f"Остались номера примечаний: {', '.join(dict.fromkeys(marks))} — их нужно удалить вместе с примечаниями.",
         "Методические рекомендации, п. 3.3")
     add(not re.search(r"\[[^\]]*/[^\]]*\]", text), "Остались неиспользованные варианты в квадратных скобках.",
         "Методические рекомендации, п. 3.3")
@@ -440,6 +447,14 @@ def analyze_draft(path: Path) -> dict:
         {"text": "Подписание в ИИС ДО должностным лицом с полномочиями", "ref": "Методические рекомендации, п. 5.1"},
         {"text": "Регистрация, затем рассылка и контроль в общем порядке Инструкции", "ref": "Методические рекомендации, п. 5.2–5.3"},
     ]
+    if issues:
+        result["next_steps"].insert(0, {"text": f"Сначала исправьте замечания выше ({len(issues)}) и загрузите проект на проверку ещё раз",
+                                        "ref": "Методические рекомендации, п. 4.1"})
+    if missing and result["module"]:
+        # постоянный текст модуля изменён — упрощённый порядок не применяется
+        result["next_steps"].insert(1, {"text": "Если изменение постоянной формулировки нужно по существу — проект согласуется "
+                                        "в полном порядке главы 10 Инструкции, со всеми заинтересованными подразделениями",
+                                        "ref": "Методические рекомендации, п. 1.3"})
     row = MATRIX_ROW.get(best["id"]) if result["module"] else None
     if row:
         result["matrix"] = {"group": row[0], "row": row[1]}

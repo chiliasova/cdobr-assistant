@@ -140,7 +140,7 @@ function finishAnswer(bot, q, res) {
 $("#messages").addEventListener("click", async (e) => {
   const t = e.target.closest("[data-i],[data-act],.chip"); if (!t) return;
   const msg = t.closest(".msg");
-  if (t.classList.contains("chip")) return ask(t.textContent);
+  if (t.classList.contains("chip")) { if (wizard) cancelWizard(); return ask(t.textContent); }
   if (t.dataset.i !== undefined && msg?._sources) return showSource(msg._sources[+t.dataset.i]);
   if (t.dataset.act === "rate") {
     await api("/api/feedback", { method: "POST", body: JSON.stringify({ log_id: +msg.dataset.log, rating: +t.dataset.v }) });
@@ -148,6 +148,7 @@ $("#messages").addEventListener("click", async (e) => {
   }
   if (t.dataset.act === "route") { openTab("route"); $("#rowSel").value = t.dataset.route; $("#routeQuestions").innerHTML = ""; loadRoute(); }
   if (t.dataset.act === "draft") startWizard(t.dataset.mod);
+  if (t.dataset.act === "cancelWizard" && wizard) cancelWizard("Подготовку проекта отменил. Задайте вопрос или выберите пример.");
   if (t.dataset.act === "template") location.href = `/api/modules/${encodeURIComponent(t.dataset.mod)}/template`;
   if (t.dataset.act === "remarks") location.href = "/api/remarks-template";
   if (t.dataset.act === "check") chatFile.click();
@@ -161,7 +162,7 @@ async function startWizard(moduleId) {
   const m = await api("/api/modules/" + encodeURIComponent(moduleId));
   wizard = { moduleId, slots: m.slots, matrix: m.matrix, values: {}, queue: [], stage: "describe" };
   addMsg("bot", "Опишите ситуацию своими словами: о чём документ, цель, участники и их должности, сроки, " +
-    "ожидаемый результат, кто контролирует и кто подписывает. Чего не хватит — уточню.");
+    "ожидаемый результат, кто контролирует и кто подписывает. Чего не хватит — уточню." + CANCEL_BTN);
   $("#q").placeholder = "Опишите ситуацию…"; $("#q").focus();
 }
 
@@ -170,10 +171,33 @@ function askNextSlot() {
   const opts = s.options ? ` Варианты: ${s.options.join(" / ")}.` : "";
   const fmt = s.kind === "date" ? " Дата в формате ДД.ММ.ГГГГ." : "";
   addMsg("bot", `Уточните, пожалуйста: ${s.label.toLowerCase()} — «…${s.context} ___».${opts}${fmt}` +
-    (s.hint ? `\n${s.hint}` : "") + "\n(Напишите «пропустить», чтобы оставить поле пустым.)");
+    (s.hint ? `\n${esc(s.hint)}` : "") + "\n(Напишите «пропустить», чтобы оставить поле пустым.)" + CANCEL_BTN);
+}
+
+const CANCEL_BTN = `<div class="actions"><button data-act="cancelWizard">Отменить подготовку</button></div>`;
+const QUESTION_START = /^(как|что|где|когда|почему|зачем|кто|какой|какая|какое|какие|каков|сколько|можно ли|нужно ли|надо ли|обязательно ли|привет|здравств|добрый)/i;
+
+// Новый вопрос посреди подготовки проекта: не путаем его с описанием или значением поля
+function isNewQuestion(text) {
+  const t = text.trim();
+  if (wizard.stage === "describe") return /\?\s*$/.test(t) || QUESTION_START.test(t) || t.length < 25;
+  return (/\?\s*$/.test(t) && t.length > 15) || (QUESTION_START.test(t) && t.length > 25);
+}
+
+function cancelWizard(note) {
+  wizard = null; $("#q").placeholder = "Задайте вопрос по документообороту…";
+  if (note) addMsg("bot", esc(note));
 }
 
 async function wizardInput(text) {
+  if (/^(отмена|отменить|стоп|выход|выйти)\b/i.test(text.trim())) {
+    addMsg("user", esc(text));
+    return cancelWizard("Подготовку проекта отменил. Задайте вопрос или выберите пример.");
+  }
+  if (isNewQuestion(text)) {
+    cancelWizard("Похоже, это новый вопрос, а не описание для проекта, поэтому подготовку я остановил. Вернуться к ней можно кнопкой «Подготовить проект со мной».");
+    return ask(text);
+  }
   addMsg("user", esc(text));
   if (wizard.stage === "describe") {
     const wait = addMsg("bot typing", "Раскладываю описание по полям шаблона…");
