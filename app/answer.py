@@ -38,7 +38,28 @@ NUM_RE = re.compile(r"\d+(?:[.,]\d+)*")
 
 
 def _context(hits: list[dict]) -> str:
-    return "\n\n".join(f"[{h['ref']}] ({h['title']})\n{h['text']}" for h in hits)
+    # длинные пункты подрезаем: на CPU каждый лишний абзац — секунды ожидания
+    return "\n\n".join(f"[{h['ref']}] ({h['title']})\n{_clip(h['text'], 900)}" for h in hits)
+
+
+def clean(text: str, hits: list[dict]) -> str:
+    """Убираем повтор вопроса в конце и приводим сокращённые ссылки к заголовкам фрагментов."""
+    text = re.sub(r"^\s*Ответ\s*:\s*", "", text)
+    m = re.search(r"^\s*(Вопрос|Фрагменты)\s*:", text, re.M)
+    if m:
+        text = text[:m.start()]
+    known = {_norm_ref(h["ref"]): h["ref"] for h in hits}
+    # модель пишет [п. 4.2] вместо [Методические рекомендации, п. 4.2]
+    alias = {}
+    for h in hits:
+        short = _norm_ref(h["ref"].split(", ")[-1])
+        if short not in known:
+            alias.setdefault(short, h["ref"])
+
+    def fix(m):
+        parts = [p.strip() for p in re.split(r";\s*", m.group(1))]
+        return "[" + "; ".join(alias.get(_norm_ref(p), p) if _norm_ref(p) not in known else p for p in parts) + "]"
+    return REF_RE.sub(fix, text).strip()
 
 
 def _norm_ref(r: str) -> str:
@@ -212,7 +233,8 @@ def _finalize(prep: dict, text: str | None) -> dict:
     if text is None:
         return {"answer": extractive(hits), "status": "extractive", "sources": hits,
                 "module": prep["module"], "problems": ["LLM недоступна — показаны дословные пункты"]}
-    if "НЕТ ОТВЕТА" in text.upper():
+    text = clean(text, hits)
+    if "НЕТ ОТВЕТА" in text.upper() or not text:
         return {"answer": REFUSAL, "status": "no_answer", "sources": [], "module": None, "problems": []}
     problems = verify(text, hits)
     status = "verified" if not problems else "unverified"

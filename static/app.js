@@ -80,10 +80,19 @@ function addMsg(cls, html) {
   return d;
 }
 
+let busy = false;
+
 async function ask(q) {
+  // локальная модель отвечает по одному вопросу за раз — новые не ставим в очередь
+  if (busy) return;
+  busy = true; setBusy(true);
   addMsg("user", esc(q));
   const bot = addMsg("bot typing", "Ищу в Инструкции…");
   let text = "", sources = [];
+  const t0 = Date.now();
+  const tick = setInterval(() => {
+    if (!text && sources.length) bot.innerHTML = `Нашёл подходящие пункты (${esc(sources.slice(0, 3).map((s) => s.ref).join(", "))}), формулирую ответ… ${Math.round((Date.now() - t0) / 1000)} с` + sourcesHtml(sources);
+  }, 1000);
   try {
     const r = await fetch("/api/ask/stream", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ question: q, history }) });
     if (r.status === 401) return showLogin();
@@ -95,12 +104,18 @@ async function ask(q) {
       while ((k = buf.indexOf("\n\n")) >= 0) {
         const block = buf.slice(0, k); buf = buf.slice(k + 2);
         const ev = /event: (\w+)/.exec(block)?.[1]; const data = JSON.parse(/data: (.*)/s.exec(block)[1]);
-        if (ev === "sources") { sources = data.sources; if (data.found) bot.textContent = ""; }
+        if (ev === "sources") { sources = data.found ? data.sources : []; }
         if (ev === "token") { text += data.t; bot.innerHTML = renderAnswer(text, sources); }
         if (ev === "done") finishAnswer(bot, q, data);
       }
     }
   } catch (e) { bot.classList.remove("typing"); bot.textContent = "Ошибка: " + e.message; }
+  finally { clearInterval(tick); busy = false; setBusy(false); }
+}
+
+function setBusy(on) {
+  const btn = $("#askForm button");
+  if (btn) { btn.disabled = on; btn.textContent = on ? "Отвечаю…" : "Спросить"; }
 }
 
 function finishAnswer(bot, q, res) {
@@ -195,7 +210,7 @@ async function showSource(s) {
 }
 
 $("#askForm").onsubmit = (e) => {
-  e.preventDefault(); const q = $("#q").value.trim(); if (!q) return;
+  e.preventDefault(); const q = $("#q").value.trim(); if (!q || (busy && !wizard)) return;
   $("#q").value = "";
   wizard ? wizardInput(q) : ask(q);
 };

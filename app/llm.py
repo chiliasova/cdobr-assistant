@@ -22,9 +22,12 @@ def embed(texts: list[str]) -> list[list[float]]:
 
 def _payload(messages, fmt=None, max_tokens=400, ctx=4096):
     p = {"model": config.LLM_MODEL, "messages": messages, "stream": False, "think": False,
+         "keep_alive": "60m",
          "options": {"temperature": 0.1, "num_predict": max_tokens, "num_ctx": ctx}}
     if fmt:
         p["format"] = fmt
+    else:
+        p["options"]["stop"] = ["\nВопрос:", "\nФрагменты:"]
     return p
 
 
@@ -63,6 +66,15 @@ def chat_json(messages: list[dict], schema: dict, max_tokens: int = 1500) -> dic
         log.warning("JSON от модели оборван (done_reason=%s, eval_count=%s, prompt_eval_count=%s): %r",
                     data.get("done_reason"), data.get("eval_count"), data.get("prompt_eval_count"), content[-200:])
         return {k: json.loads(f'"{v}"') for k, v in PAIR_RE.findall(content)}
+
+
+def warmup() -> None:
+    """Загружаем модель в память заранее, чтобы первый вопрос не ждал загрузки."""
+    try:
+        chat([{"role": "user", "content": "Ответь: ок"}], max_tokens=2)
+        log.info("Модель %s загружена", config.LLM_MODEL)
+    except Exception as e:
+        log.warning("Модель не прогрета: %s", e)
 
 
 def available() -> bool:

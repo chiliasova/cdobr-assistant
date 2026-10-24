@@ -136,3 +136,11 @@ def test_intents(client):
     assert r["actions"][0]["type"] == "check"
     r = client.post("/api/ask", json={"question": "Как оформить реестр замечаний к проекту документа?"}).json()
     assert any(a["type"] == "remarks" for a in r["actions"])
+
+
+def test_clean_echo_and_short_refs():
+    from app import answer
+    hits = [{"ref": "п. 9.5.6"}, {"ref": "Методические рекомендации, п. 4.2"}]
+    t = answer.clean("1. Визы ставят по порядку [п. 4.2].\n2. Пункты [п. 9.5.6].\n\nВопрос: что делать?", hits)
+    assert "Вопрос" not in t
+    assert "[Методические рекомендации, п. 4.2]" in t and "[п. 9.5.6]" in t

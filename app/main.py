@@ -27,6 +27,9 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name
 @asynccontextmanager
 async def lifespan(_):
     search.get_index()  # прогрев: разбор источников и векторный индекс
+    if config.USE_LLM:
+        import threading
+        threading.Thread(target=llm.warmup, daemon=True).start()
     yield
 
 
