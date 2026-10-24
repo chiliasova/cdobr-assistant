@@ -241,6 +241,14 @@ def finalize(prep: dict, text: str | None) -> dict:
     res["actions"] = prep["actions"] if ok else []
     if ok and prep.get("suffix") and not prep.get("direct"):
         res["answer"] += "\n\n" + prep["suffix"]
+        # пункты из добавки тоже делаем кликабельными
+        have = {s["ref"] for s in res["sources"]}
+        for r in REF_RE.findall(prep["suffix"]):
+            for part in re.split(r";\s*", r):
+                c = next((c for c in search.get_index().chunks if c.ref == part.strip()), None)
+                if c and c.ref not in have:
+                    have.add(c.ref)
+                    res["sources"] = res["sources"] + [{**c.to_dict(), "relevance": 1.0}]
     return res
 
 
