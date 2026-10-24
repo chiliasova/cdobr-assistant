@@ -111,6 +111,39 @@ def verify(answer: str, hits: list[dict]) -> list[str]:
     return problems
 
 
+def _prune(answer: str, hits: list[dict]) -> str:
+    """Убираем предложения, которые не подтверждаются пунктами, остальное оставляем.
+
+    Модель часто пишет верные шаги и одну лишнюю фразу вроде «Всё регламентировано [п. 1.1, 4.2]»:
+    из-за неё весь ответ не стоит превращать в цитаты.
+    """
+    lines = []
+    for line in answer.split("\n"):
+        m = re.match(r"\s*(\d+[.)]\s+|[-•]\s+)?", line)
+        mark, body = m.group(1) or "", line[m.end():]
+        kept = [x for x in SENT_RE.split(body) if x.strip() and not _sentence_bad(x, hits)]
+        if kept:
+            lines.append(mark + " ".join(kept))
+        elif not line.strip():
+            lines.append("")
+    text = re.sub(r"\n{3,}", "\n\n", "\n".join(lines)).strip()
+    n = 0
+
+    def renum(m: re.Match) -> str:
+        nonlocal n
+        n += 1
+        return f"{n}."
+    return re.sub(r"(?m)^\d+\.(?=\s)", renum, text)
+
+
+def _sentence_bad(sent: str, hits: list[dict]) -> bool:
+    body = re.sub(r"^\s*\d+[.)]\s", "", sent)
+    if not REF_RE.search(body):
+        # фраза без ссылки допустима только как короткая связка («Порядок такой:»)
+        return len(search.tokenize(body)) > 6
+    return bool(verify(body, hits))
+
+
 COND_RE = re.compile(r"(?:поступающ|направляем|адресуем|подготовленн|исходящ|входящ)\w*\s+(?:от|в|из|для|без)\s+[^,.;—«]+", re.I)
 
 
@@ -311,6 +344,33 @@ def _approval_suffix(question: str) -> str:
     return text
 
 
+DRAFT_STEPS = ("Порядок подготовки проекта по модулю:\n"
+               "1. Убедитесь, что модуль действует: проверьте в реестре модулей наименование, дату и редакцию "
+               "[Методические рекомендации, п. 1.2].\n"
+               "2. Создайте в ИИС ДО карточку проекта; в поле «Примечание» укажите, что проект подготовлен на основе модуля, "
+               "его наименование, номер и редакцию [Методические рекомендации, п. 2.3].\n"
+               "3. Сохраните копию файла модуля как проект и заполните поля по пояснениям к модулю "
+               "[Методические рекомендации, п. 3.2].\n"
+               "4. Удалите линии, скобки, номера примечаний, гриф «УТВЕРЖДАЮ» и пометку «МОДУЛЬНЫЙ ДОКУМЕНТ»; зоны даты, "
+               "регистрационного номера и электронной подписи оставьте [Методические рекомендации, п. 3.3].\n"
+               "5. Сверьте проект с модулем и завизируйте его; дальше лингвистическая экспертиза и виза Департамента ДОУ "
+               "[Методические рекомендации, п. 4.2].\n"
+               "6. После визирования проект уходит на подписание и регистрацию [Методические рекомендации, п. 5.1].")
+
+
+# пункт Инструкции о содержании именно этого вида документа (есть не для всех модулей)
+OWN_POINT = {"Модуль_приказа_о_вводе_ИС": "п. 9.5.6"}
+
+
+def _draft_steps(module: dict) -> str:
+    text = DRAFT_STEPS
+    own = OWN_POINT.get(module["module_id"])
+    if own:
+        text += (f"\n\nЧто обязательно указать в таком приказе, перечислено в {own} Инструкции [{own}]: "
+                 "при подготовке со мной я спрошу каждое поле по порядку.")
+    return text
+
+
 def _draft_suffix(module: dict) -> str:
     """Добавка к ответу о подготовке документа: модуль и визы по Матрице (без LLM)."""
     text = (f"Для такого документа есть модуль «{module['title']}». Проект, строго соответствующий модулю, "
@@ -413,7 +473,9 @@ def _prepare(question: str, history: list[dict]) -> dict:
                   "совпадение постоянных формулировок с модулем [Методические рекомендации, п. 3.3].\n\n" + NEXT_STEPS_LIST)
         actions.append({"type": "check", "label": "Загрузить проект на проверку"})
     elif module and found:
-        suffix = _draft_suffix(module)
+        # Подготовка по модулю — без пересказа моделью: порядок из методички, модуль и визы по Матрице.
+        # Мгновенно и без риска лишних ссылок; содержание полей бот спросит в мастере.
+        direct = _draft_steps(module) + "\n\n" + _draft_suffix(module)
         actions += [{"type": "draft", "label": "Подготовить проект со мной", "module_id": module["module_id"]},
                     {"type": "template", "label": "Скачать пустой шаблон", "module_id": module["module_id"]}]
     elif (APPROVAL_RE.search(_query(question, history)) and not module and not _route_hint(hits)
@@ -492,7 +554,8 @@ def finalize(prep: dict, text: str | None) -> dict:
     if prep.get("fixes") and res["status"] != "no_answer":
         res["understood"] = prep["question"]
     ok = res["status"] != "no_answer"
-    res["route"] = prep["route"] if ok and not prep.get("direct") else None  # вид документа ещё неизвестен
+    # при готовом ответе вид документа обычно ещё неизвестен; для модуля он есть
+    res["route"] = prep["route"] if ok and (not prep.get("direct") or prep.get("module")) else None
     res["actions"] = prep["actions"] if ok else []
     if ok and prep.get("suffix") and not prep.get("direct"):
         res["answer"] += "\n\n" + prep["suffix"]
@@ -540,11 +603,16 @@ def _finalize(prep: dict, text: str | None) -> dict:
                 + "\n\n".join(f"{h['text']} [{h['ref']}]" for h in cited[:1]),
                 "status": "extractive", "sources": hits, "module": prep["module"], "problems": lost}
     problems = verify(text, hits)
-    status = "verified" if not problems else "unverified"
-    answer = text
     if problems:
-        answer = text + "\n\n⚠️ Часть ответа не удалось сверить с источником. Дословно:\n\n" + extractive(hits, 1).split("\n\n", 1)[1]
-    return {"answer": answer, "status": status, "sources": hits, "module": prep["module"], "problems": problems}
+        # оставляем подтверждённые предложения; если не осталось ничего — пункт дословно
+        pruned = _prune(text, hits)
+        if pruned and REF_RE.search(pruned) and not verify(pruned, hits):
+            log.info("Убраны неподтверждённые предложения: %s", problems)
+            return {"answer": pruned, "status": "verified", "sources": hits, "module": prep["module"], "problems": problems}
+        return {"answer": "Пересказ не прошёл сверку с источником, поэтому привожу пункт дословно:\n\n"
+                + extractive(hits, 1).split("\n\n", 1)[1],
+                "status": "extractive", "sources": hits, "module": prep["module"], "problems": problems}
+    return {"answer": text, "status": "verified", "sources": hits, "module": prep["module"], "problems": problems}
 
 
 def ask(question: str, history: list[dict] | None = None) -> dict:

@@ -268,3 +268,21 @@ def test_colloquial_draft_request_offers_module():
     from app import answer
     assert answer.prepare("мне надо приказ о вводе ис")["module"]["module_id"] == "Модуль_приказа_о_вводе_ИС"
     assert answer.prepare("сделай распоряжение о рабочей групе")["module"]["module_id"] == "Модуль_распоряжения_о_рабочей_группе"
+
+
+def test_draft_request_answered_without_llm(client):
+    r = client.post("/api/ask", json={"question": "Мне нужно подготовить приказ о вводе ИС"}).json()
+    assert r["status"] == "verified" and "⚠" not in r["answer"]
+    assert "Порядок подготовки проекта по модулю" in r["answer"] and "[п. 9.5.6]" in r["answer"]
+    assert {a["type"] for a in r["actions"]} == {"draft", "template"} and r["route"]["row"] == 3
+
+
+def test_prune_drops_only_unconfirmed_sentence():
+    from app import answer, search
+    hits = search.get_index().search("приказ о вводе ИС в эксплуатацию 9.5.6 9.5.10", k=10)
+    t = ("1. Укажите основание и результаты испытаний, дату ввода, режим эксплуатации, владельца системы и "
+         "сопровождающие подразделения [п. 9.5.6].\n\nВсе действия регламентированы в Методических рекомендациях "
+         "[п. 1.1, 4.2, 9.5.6, 9.5.10].")
+    out = answer._prune(t, hits)
+    assert out.startswith("1. Укажите основание") and "регламентированы" not in out
+    assert not answer.verify(out, hits)
