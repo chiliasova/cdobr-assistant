@@ -26,6 +26,7 @@ SYSTEM = """Ты — помощник сотрудника по Инструкц
 - Если ответ зависит от вида документа (приказ, распоряжение, положение, письмо), а вид не назван — дай общий порядок и в конце попроси уточнить вид документа.
 - После каждого предложения ставь ссылку на фрагмент, из которого оно взято, в квадратных скобках точно как в заголовке фрагмента, например [п. 10.3]. Не ссылайся на фрагмент, в котором этого нет.
 - Сроки, числа, условия («для документов от органов власти» и т. п.) и названия подразделений переписывай точно как во фрагменте.
+- Если фрагменты описывают общий порядок, который применим к вопросу (например, согласование любого проекта документа), — отвечай по ним, это и есть ответ.
 - Если во фрагментах нет ответа на вопрос, ответь ровно: НЕТ ОТВЕТА"""
 
 REFUSAL = ("В Инструкции и связанных документах я не нашёл ответа на этот вопрос. "
@@ -219,6 +220,20 @@ def _terms() -> dict[str, str]:
     return dict(re.findall(r"•\s*([^—•]+?)\s+—\s+(\d+ рабоч\w+ дн\w+)", c.text)) if c else {}
 
 
+APPROVAL_STEPS = (
+    "1. Ответственный исполнитель оформляет ПД, согласует его внутри своего подразделения, определяет заинтересованные "
+    "подразделения с учетом Матрицы обязательного визирования и одновременно направляет ПД во все заинтересованные "
+    "подразделения с отметкой «Первичное рассмотрение» [п. 10.2].\n"
+    "2. Каждое подразделение рассматривает ПД только в пределах компетенции [п. 10.4]; руководитель подразделения "
+    "персонально отвечает за организацию рассмотрения и соблюдение срока [п. 10.14].\n"
+    "3. При повторном рассмотрении таблица замечаний обязательна [п. 10.5]; существенные разногласия рассматриваются "
+    "на согласительном совещании [п. 10.10].\n"
+    "4. Визирование — строго по порядку: исполнитель, работники и руководитель ответственного подразделения, "
+    "заинтересованные подразделения, подразделения обязательного визирования по Матрице, юридическое подразделение, "
+    "Департамент ДОУ, координирующее должностное лицо [п. 10.6].\n"
+    "5. Затем лингвистическая экспертиза, подписание и регистрация [п. 10.2].")
+
+
 def _approval_suffix(question: str) -> str:
     terms = _terms()
     if not terms:
@@ -275,9 +290,14 @@ def prepare(question: str, history: list[dict] | None = None) -> dict:
         suffix = _draft_suffix(module)
         actions += [{"type": "draft", "label": "Подготовить проект со мной", "module_id": module["module_id"]},
                     {"type": "template", "label": "Скачать пустой шаблон", "module_id": module["module_id"]}]
-    elif APPROVAL_RE.search(_query(question, history)) and found:
-        # «а для положения?» после вопроса о согласовании — тот же сценарий
-        suffix = _approval_suffix(question if DOC_RE.search(question) else _query(question, history))
+    elif (APPROVAL_RE.search(_query(question, history)) and not module and not _route_hint(hits)
+          and re.search(r"\bкак\b|порядо?к|организ|срок|а для|а если", question, re.I)):
+        # Общий порядок согласования — из главы 10 без пересказа моделью: так быстрее (нет минуты ожидания)
+        # и без риска перепутать сроки. «А для положения?» после такого вопроса — тот же сценарий.
+        found = True
+        terms = _approval_suffix(question if DOC_RE.search(question) else _query(question, history))
+        # спросили о конкретном виде документа — срок первым, общий порядок после
+        direct = terms + "\n\n" + APPROVAL_STEPS if DOC_RE.search(question) else APPROVAL_STEPS + "\n\n" + terms
     if REMARKS_RE.search(question) and found:
         suffix += (" Таблицу для сбора замечаний я подготовил по форме Приложения № 1 к Инструкции "
                    "(номер, автор и подразделение, фрагмент ПД, содержание, предложенная редакция, позиция исполнителя, "
@@ -291,7 +311,7 @@ def prepare(question: str, history: list[dict] | None = None) -> dict:
                           k=3, sources={"methodology"})
     if APPROVAL_RE.search(_query(question, history)) and not module and not direct:
         # общий порядок согласования: кто готовит, последовательность виз, Матрица, сроки
-        want = ("п. 10.2", "п. 10.6", "п. 10.11", "п. 10.14")
+        want = ("п. 10.2", "п. 10.6", "п. 10.11", "п. 10.14", "п. 10.5")
         extra = [{**c.to_dict(), "relevance": 1.0} for r in want for c in ix.chunks if c.ref == r]
     if REMARKS_RE.search(question):
         extra = ix.search("таблица замечаний по приложению 1 систематизирует замечания повторное рассмотрение",
@@ -307,7 +327,8 @@ def prepare(question: str, history: list[dict] | None = None) -> dict:
         # визы по Матрице уже перечислены в suffix — строку таблицы модель только пересказывает с обрывом
         merged = [h for h in merged if h["source"] != "matrix"]
     hits = merged[:config.TOP_K]
-    return {"hits": hits, "found": found, "module": module, "direct": direct, "question": question, "suffix": suffix.strip(),
+    fallback = APPROVAL_STEPS if APPROVAL_RE.search(_query(question, history)) and not module and not direct else None
+    return {"hits": hits, "found": found, "module": module, "direct": direct, "question": question, "fallback": fallback, "suffix": suffix.strip(),
             "actions": actions, "route": route,
             "messages": [{"role": "system", "content": SYSTEM},
                          *[{"role": h["role"], "content": h["content"]} for h in history[-4:]],
@@ -361,6 +382,13 @@ def _finalize(prep: dict, text: str | None) -> dict:
                 "module": prep["module"], "problems": ["LLM недоступна — показаны дословные пункты"]}
     text = clean(text, hits)
     if "НЕТ ОТВЕТА" in text.upper() or not text:
+        if prep.get("fallback"):
+            # маленькая модель иногда отказывается, хотя пункты найдены, — даём порядок по ним дословно
+            return {"answer": prep["fallback"], "status": "verified", "sources": hits, "module": prep["module"],
+                    "problems": []}
+        if prep.get("suffix"):
+            return {"answer": extractive(hits), "status": "extractive", "sources": hits, "module": prep["module"],
+                    "problems": []}
         return {"answer": REFUSAL, "status": "no_answer", "sources": [], "module": None, "problems": []}
     text = _drop_foreign(text, hits, prep.get("question", ""))
     problems = verify(text, hits)
