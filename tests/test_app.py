@@ -286,3 +286,12 @@ def test_prune_drops_only_unconfirmed_sentence():
     out = answer._prune(t, hits)
     assert out.startswith("1. Укажите основание") and "регламентированы" not in out
     assert not answer.verify(out, hits)
+
+
+def test_module_only_when_subject_matches():
+    from app import answer
+    assert answer.prepare("составить приказ о командировке")["module"] is None
+    p = answer.prepare("нужен приказ")
+    assert p["module"] is None and {a["type"] for a in p["actions"]} == {"draft"} and len(p["actions"]) == 4
+    assert answer.prepare("подготовить приказ об утверждении положения")["module"]["module_id"] == "Модуль_приказа_об_утверждении_ЛНА"
+    assert answer.prepare("помощь")["direct"] == answer.SMALLTALK

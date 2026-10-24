@@ -240,11 +240,28 @@ def _module_hint(question: str, hits: list[dict]) -> dict | None:
     # модули есть только для приказов и распоряжений: «как составить письмо» — не про модуль
     if not DRAFT_RE.search(question) or not re.search(r"приказ|распоряж|модул|шаблон", question, re.I):
         return None
+    words = set(search.tokenize(question))
     ix = search.get_index()
-    mods = ix.search(question, k=1, sources={"module"})
-    if mods and mods[0]["relevance"] >= 0.3:
-        return {"module_id": mods[0]["meta"]["file"].removesuffix(".docx"), "title": mods[0]["ref"]}
+    for m in ix.search(question, k=3, sources={"module"}):
+        mid = m["meta"]["file"].removesuffix(".docx")
+        # модуль берём, только если в вопросе есть его предмет: «приказ о командировке» — не «о назначении ответственных»
+        if m["relevance"] >= 0.3 and words & SUBJECTS.get(mid, set()):
+            return {"module_id": mid, "title": m["ref"]}
     return None
+
+
+SUBJECTS = {k: set(v.split()) for k, v in {
+    "Модуль_приказа_о_вводе_ИС": "ввод ис информационный система эксплуатация",
+    "Модуль_приказа_о_приеме_и_передаче_дел": "приём прием передача передать принять имущество",
+    "Модуль_приказа_о_назначении_ответственных": "назначение назначить ответственный делопроизводство",
+    "Модуль_приказа_об_утверждении_ЛНА": "утверждение утвердить лна положение регламент локальный нормативный акт",
+    "Модуль_распоряжения_о_внутреннем_аудите": "аудит",
+    "Модуль_распоряжения_о_проектном_комитете": "проектный комитет",
+    "Модуль_распоряжения_о_рабочей_группе": "рабочий группа",
+}.items()}
+# вопрос только о виде документа, без предмета: «нужен приказ», «как оформить распоряжение»
+BARE = set("приказ распоряжение подготовить оформить составить нужный сделать написать проект модуль шаблон "
+           "документ надо хотеть мочь пожалуйста помочь создать сформировать".split())
 
 
 def _route_hint(hits: list[dict]) -> dict | None:
@@ -389,7 +406,23 @@ def _draft_suffix(module: dict) -> str:
 
 
 SMALLTALK_RE = re.compile(r"\s*(привет\w*|здравствуй\w*|добр\w+ (день|утро|вечер)|как (у тебя )?дела|как ты|"
-                          r"кто ты|что ты (умеешь|можешь)|спасибо|благодарю|пока|до свидания)[\s!?.,)]*$", re.I)
+                          r"кто ты|что ты (умеешь|можешь)|спасибо|благодарю|пока|до свидания|помощь|помоги|help|меню|"
+                          r"начать|старт|ты тут|ау)[\s!?.,)]*$", re.I)
+# «приказ», «шаблоны», «какие модули есть» — без предмета: показываем каталог модулей
+CATALOG_RE = re.compile(r"\s*(какие|список|покажи|есть ли|все)?\s*(модул\w*|шаблон\w*|модульн\w+ документ\w*|"
+                        r"приказ\w*|распоряжени\w*)\s*(есть|бывают|имеются|документов)?\s*\??\s*$", re.I)
+
+
+def _catalog(question: str) -> dict:
+    mods = modules.list_modules()
+    if re.search(r"приказ", question, re.I):
+        mods = [m for m in mods if m["kind"] == "Приказ"]
+    elif re.search(r"распоряж", question, re.I):
+        mods = [m for m in mods if m["kind"] == "Распоряжение"]
+    text = ("Для таких документов есть утверждённые модули: проект по модулю не направляется на повторное полное "
+            "согласование [Методические рекомендации, п. 1.3]. Выберите нужный, и я помогу подготовить проект, "
+            "или опишите задачу своими словами:\n" + "\n".join(f"• {m['title']}" for m in mods))
+    return {"text": text, "actions": [{"type": "draft", "label": m["title"], "module_id": m["id"]} for m in mods]}
 SMALLTALK = ("Здравствуйте! Я помощник по Инструкции о документообороте: отвечаю на вопросы со ссылками на пункты, "
              "подбираю модуль и помогаю подготовить проект приказа или распоряжения, считаю маршрут визирования по "
              "Матрице и проверяю готовый проект. Спросите, например: «Что делать с документом с отметкой «Срочно»?»")
@@ -465,7 +498,11 @@ def _prepare(question: str, history: list[dict]) -> dict:
     found = bool(best >= config.MIN_RELEVANCE)
     module = _module_hint(question, hits)
     direct, suffix, actions = None, "", []
-    if CHECK_RE.search(question):
+    bare = DRAFT_RE.search(question) and set(search.tokenize(question)) <= BARE
+    if (CATALOG_RE.match(question) or bare) and not module:
+        cat = _catalog(question)
+        found, direct, actions = True, cat["text"], cat["actions"]
+    elif CHECK_RE.search(question) or re.match(r"\s*(провер\w*|проверка)(\s+(мой|мою|проект|документ)\w*)?[\s?!.]*$", question, re.I):
         # «Проверь мой проект» — без LLM: просим файл и сразу говорим, что дальше
         found = True
         direct = ("Загрузите проект в формате .docx кнопкой ниже. Проверю незаполненные поля, оставшиеся элементы шаблона "
