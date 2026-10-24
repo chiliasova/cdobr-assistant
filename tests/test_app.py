@@ -199,3 +199,10 @@ def test_lost_condition_gives_verbatim():
     prep = {"hits": [other, hit], "found": True, "module": None, "direct": None, "suffix": "", "actions": [], "route": None}
     r = answer.finalize(prep, "Документы с отметкой «Срочно» исполняются в течение 3 рабочих дней [п. 6.7].")
     assert r["status"] == "extractive" and "органов государственной власти" in r["answer"] and "[п. 6.7]" in r["answer"]
+
+
+def test_offtopic_not_glued_to_previous():
+    from app import answer
+    h = [{"role": "user", "content": "Что делать с документом с отметкой «Срочно»?"}, {"role": "assistant", "content": "…"}]
+    assert answer._query("какая погода в Ростове?", h) == "какая погода в Ростове?"
+    assert answer._query("а для положения?", h).startswith("Что делать")

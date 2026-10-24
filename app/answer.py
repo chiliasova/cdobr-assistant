@@ -213,8 +213,11 @@ def _route_hint(hits: list[dict]) -> dict | None:
 
 def _query(question: str, history: list[dict]) -> str:
     # Короткий уточняющий вопрос («а для распоряжения?») ищем вместе с предыдущим
+    # Склеиваем только явные уточнения: «а для …», «а если …», «и …», «то же для …» — иначе
+    # «какая погода в Ростове?» после вопроса о сроках искалась бы вместе с ним
     prev = [h["content"] for h in history if h.get("role") == "user"][-1:]
-    return (prev[0] + " " + question) if prev and len(question) < 60 else question
+    follow = re.match(r"\s*(а|и|но|то же|тоже|а что|а как|а если|а для|для|в случае|если)\b", question, re.I)
+    return (prev[0] + " " + question) if prev and len(question) < 60 and follow else question
 
 
 CHECK_RE = re.compile(r"провер(ь|ьте|ить|ка)\b.*(приказ|распоряж|проект|документ|черновик)|"
@@ -433,7 +436,7 @@ def _finalize(prep: dict, text: str | None) -> dict:
             # маленькая модель иногда отказывается, хотя пункты найдены, — даём порядок по ним дословно
             return {"answer": prep["fallback"], "status": "verified", "sources": hits, "module": prep["module"],
                     "problems": []}
-        if prep.get("suffix") or (hits and hits[0]["relevance"] >= 0.6):
+        if prep.get("suffix") or (hits and hits[0]["relevance"] >= 0.75):
             # пункт явно по теме, а модель отказалась — показываем его дословно, а не отказ
             return {"answer": extractive(hits), "status": "extractive", "sources": hits, "module": prep["module"],
                     "problems": []}
